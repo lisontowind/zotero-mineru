@@ -1670,9 +1670,72 @@ ZoteroMineru = {
 		return entries[0];
 	},
 
+	buildPrefixedNoteTitle(prefix, attachmentTitle) {
+		let baseTitle = String(attachmentTitle || "").trim() || "PDF";
+		let cleanPrefix = String(prefix || "").trim();
+		if (!cleanPrefix) return baseTitle;
+		let normalizedBase = baseTitle.toLowerCase();
+		let normalizedPrefix = cleanPrefix.toLowerCase();
+		if (
+			normalizedBase === normalizedPrefix
+			|| normalizedBase.startsWith(normalizedPrefix + " ")
+			|| normalizedBase.startsWith(normalizedPrefix + "-")
+			|| normalizedBase.startsWith(normalizedPrefix + "_")
+		) {
+			return baseTitle;
+		}
+		return `${cleanPrefix} ${baseTitle}`;
+	},
+
+	stripHTMLToPlainText(html) {
+		return String(html || "")
+			.replace(/<script[\s\S]*?<\/script>/gi, " ")
+			.replace(/<style[\s\S]*?<\/style>/gi, " ")
+			.replace(/<[^>]+>/g, " ")
+			.replace(/&nbsp;/gi, " ")
+			.replace(/&amp;/gi, "&")
+			.replace(/&lt;/gi, "<")
+			.replace(/&gt;/gi, ">")
+			.replace(/&quot;/gi, "\"")
+			.replace(/&#39;/gi, "'")
+			.replace(/\s+/g, " ")
+			.trim();
+	},
+
+	ensureNoteTitleInHTML(contentHTML, noteTitle) {
+		let title = String(noteTitle || "").trim();
+		let html = String(contentHTML || "").trim();
+		if (!title) {
+			return html || "<p></p>";
+		}
+		let plain = this.stripHTMLToPlainText(html).toLowerCase();
+		let normalizedTitle = title.toLowerCase();
+		if (plain.startsWith(normalizedTitle)) {
+			return html || "<p></p>";
+		}
+		let titleParagraph = `<p><strong>${this.escapeHTML(title)}</strong></p>`;
+		if (!html) return titleParagraph;
+		return `${titleParagraph}\n${html}`;
+	},
+
+	trySetNoteTitle(note, title) {
+		let cleanTitle = String(title || "").trim();
+		if (!note || !cleanTitle || typeof note.setField !== "function") return;
+		try {
+			note.setField("title", cleanTitle);
+		}
+		catch (e) {
+			this.log(`设置笔记标题失败: ${e?.message || e}`);
+		}
+	},
+
 	async saveResultAsNote({ attachment, parentItem, parsedResult, settings }) {
 		let attachmentTitle = attachment.getField("title")
 			|| this.fileNameFromPath(attachment.getFilePath() || "PDF");
+		let noteTitle = this.buildPrefixedNoteTitle(
+			settings?.noteTitlePrefix,
+			attachmentTitle
+		);
 		let note = new Zotero.Item("note");
 		note.libraryID = attachment.libraryID;
 		if (parentItem) {
@@ -1685,15 +1748,20 @@ ZoteroMineru = {
 			? parsedResult.embeddedImages
 			: [];
 		note.setNote("<p></p>");
+		this.trySetNoteTitle(note, noteTitle);
 		await note.saveTx();
-		let embeddedResult = await this.materializeEmbeddedImagesForNote({
-			note,
-			contentHTML,
-			embeddedImages
-		});
-		let noteHTML = embeddedResult.contentHTML || "<p></p>";
-		note.setNote(noteHTML);
-		await note.saveTx();
+			let embeddedResult = await this.materializeEmbeddedImagesForNote({
+				note,
+				contentHTML,
+				embeddedImages
+			});
+			let noteHTML = this.ensureNoteTitleInHTML(
+				embeddedResult.contentHTML || "<p></p>",
+				noteTitle
+			);
+			note.setNote(noteHTML);
+			this.trySetNoteTitle(note, noteTitle);
+			await note.saveTx();
 	},
 
 	async materializeEmbeddedImagesForNote({ note, contentHTML, embeddedImages }) {
