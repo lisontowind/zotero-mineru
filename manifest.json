@@ -1,0 +1,21 @@
+{
+	"manifest_version": 2,
+	"name": "Zotero MinerU Parser",
+	"version": "0.1.38",
+	"description": "Parse PDF attachments with MinerU API and save results as notes",
+	"author": "Zotero MinerU Plugin",
+	"homepage_url": "https://github.com/your-org/zotero-mineru",
+	"icons": {
+		"16": "icon16.svg",
+		"48": "icon.svg",
+		"96": "icon.svg"
+	},
+	"applications": {
+		"zotero": {
+			"id": "zotero-mineru@example.com",
+			"update_url": "https://example.com/zotero-mineru/updates.json",
+			"strict_min_version": "8.0",
+			"strict_max_version": "8.0.*"
+		}
+	}
+}

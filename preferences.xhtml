@@ -1,0 +1,43 @@
+<vbox
+	xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+	xmlns:html="http://www.w3.org/1999/xhtml"
+	id="zotero-mineru-prefpane"
+	flex="1"
+	onload="if (window.ZoteroMineruPreferences) { window.ZoteroMineruPreferences.init(); }"
+>
+	<html:div class="mineru-pane">
+		<html:h2>MinerU PDF 解析设置</html:h2>
+		<html:div class="mineru-grid">
+			<html:label for="mineru-api-base-url">API Base URL</html:label>
+			<html:input id="mineru-api-base-url" type="url" placeholder="https://mineru.net/api/v4" />
+
+			<html:label for="mineru-api-token">API Token</html:label>
+			<html:input id="mineru-api-token" type="password" placeholder="MinerU 控制台生成的 token" />
+
+			<html:label for="mineru-model-version">模型版本</html:label>
+			<html:select id="mineru-model-version">
+				<html:option value="vlm">vlm</html:option>
+				<html:option value="pipeline">pipeline</html:option>
+			</html:select>
+
+			<html:label for="mineru-poll-interval-sec">轮询间隔(秒)</html:label>
+			<html:input id="mineru-poll-interval-sec" type="number" min="1" max="60" step="1" />
+
+				<html:label for="mineru-timeout-sec">请求超时(秒)</html:label>
+				<html:input id="mineru-timeout-sec" type="number" min="5" max="3600" step="1" />
+
+				<html:label for="mineru-note-title-prefix">笔记标题前缀</html:label>
+				<html:input id="mineru-note-title-prefix" type="text" />
+			</html:div>
+			<html:div class="mineru-actions">
+				<html:button id="mineru-save-button" type="button">保存</html:button>
+				<html:button id="mineru-test-button" type="button">测试连接</html:button>
+				<html:span id="mineru-status"></html:span>
+			</html:div>
+		<html:pre id="mineru-test-output" class="mineru-test-output"></html:pre>
+		<html:p class="mineru-help">
+			调用官方 MinerU API 流程：申请上传地址、上传 PDF、轮询任务结果、下载完整结果 ZIP，并将 Markdown 写入新笔记。
+		</html:p>
+	</html:div>
+	<html:script src="preferences.js"></html:script>
+</vbox>
