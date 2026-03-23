@@ -46,9 +46,7 @@ jobs:
 
       - name: Update release metadata
         run: |
-          REPO="${{ github.repository }}"
-          VERSION="${{ steps.version.outputs.version }}"
-          node -e "const fs=require('fs'); const repo=process.env.REPO; const version=process.env.VERSION; const data={addons:{'zotero-mineru@example.com':{updates:[{version,update_link:'https://github.com/'+repo+'/releases/latest/download/zotero-mineru.xpi',applications:{zotero:{strict_min_version:'8.0',strict_max_version:'8.0.*'}}}]}}}; fs.writeFileSync('updates.json', JSON.stringify(data, null, '\t') + '\n');"
+          REPO="${{ github.repository }}" VERSION="${{ steps.version.outputs.version }}" node -e "const fs=require('fs'); const repo=process.env.REPO; const version=process.env.VERSION; const data={addons:{'zotero-mineru@example.com':{updates:[{version,update_link:'https://github.com/'+repo+'/releases/latest/download/zotero-mineru.xpi',applications:{zotero:{strict_min_version:'8.0',strict_max_version:'8.0.*'}}}]}}}; fs.writeFileSync('updates.json', JSON.stringify(data, null, '\t') + '\n');"
 
       - name: Commit metadata to main
         run: |
