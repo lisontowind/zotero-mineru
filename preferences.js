@@ -8,7 +8,10 @@ var ZoteroMineruPreferences = {
 		{ id: "mineru-model-version", pref: "modelVersion", type: "string" },
 		{ id: "mineru-poll-interval-sec", pref: "pollIntervalSec", type: "int" },
 		{ id: "mineru-timeout-sec", pref: "timeoutSec", type: "int" },
-		{ id: "mineru-note-title-prefix", pref: "noteTitlePrefix", type: "string" }
+		{ id: "mineru-note-title-prefix", pref: "noteTitlePrefix", type: "string" },
+		{ id: "mineru-llm-api-base-url", pref: "llmApiBaseURL", type: "string" },
+		{ id: "mineru-llm-api-key", pref: "llmApiKey", type: "string" },
+		{ id: "mineru-llm-model", pref: "llmModel", type: "string" }
 	],
 
 	$(id) {
@@ -120,7 +123,7 @@ var ZoteroMineruPreferences = {
 		let controller = new AbortController();
 		let timeoutID = setTimeout(() => controller.abort(), settings.timeoutMS);
 		try {
-			this.setStatus("正在测试连接...");
+			this.setStatus("正在测试 MinerU 连接...");
 			this.setOutput(`POST ${endpoint}\nToken长度: ${settings.apiToken.length}`);
 
 			let response = await fetch(endpoint, {
@@ -153,7 +156,7 @@ var ZoteroMineruPreferences = {
 			}
 
 			if (json && json.code === 0) {
-				this.setStatus("连接成功：Token 可用");
+				this.setStatus("MinerU 连接成功：Token 可用");
 				this.setOutput(JSON.stringify({
 					endpoint,
 					code: json.code,
@@ -176,6 +179,93 @@ var ZoteroMineruPreferences = {
 		}
 	},
 
+	readLLMSettings() {
+		let apiBaseURL = (Zotero.Prefs.get(this.PREF_BRANCH + "llmApiBaseURL", true) || "").trim();
+		apiBaseURL = apiBaseURL.replace(/\/+$/, "");
+		let apiKey = (Zotero.Prefs.get(this.PREF_BRANCH + "llmApiKey", true) || "").trim();
+		apiKey = apiKey.replace(/^Bearer\s+/i, "");
+		let model = (Zotero.Prefs.get(this.PREF_BRANCH + "llmModel", true) || "").trim();
+		return { apiBaseURL, apiKey, model };
+	},
+
+	async testLLMConnection() {
+		this.saveSettings({ silent: true });
+		let llm = this.readLLMSettings();
+		if (!llm.apiBaseURL || !llm.apiKey || !llm.model) {
+			this.setStatus("测试失败：LLM 设置不完整", true);
+			this.setOutput("请先填写 LLM API Base URL、API Key 和模型名称。");
+			return;
+		}
+
+		let endpoint = llm.apiBaseURL + "/chat/completions";
+		let payload = {
+			model: llm.model,
+			messages: [
+				{ role: "user", content: "Hi, reply with one word to confirm connectivity." }
+			],
+			max_tokens: 16
+		};
+
+		let controller = new AbortController();
+		let timeoutID = setTimeout(() => controller.abort(), 30000);
+		try {
+			this.setStatus("正在测试 LLM 连接...");
+			this.setOutput(`POST ${endpoint}\n模型: ${llm.model}\nKey长度: ${llm.apiKey.length}`);
+
+			let response = await fetch(endpoint, {
+				method: "POST",
+				headers: {
+					"Accept": "application/json",
+					"Content-Type": "application/json",
+					"Authorization": "Bearer " + llm.apiKey
+				},
+				body: JSON.stringify(payload),
+				signal: controller.signal
+			});
+
+			let text = await response.text();
+			let json = null;
+			try {
+				json = JSON.parse(text);
+			}
+			catch (_e) {}
+
+			if (response.status === 401 || response.status === 403) {
+				this.setStatus("测试失败：API Key 无效或权限不足", true);
+				this.setOutput(`HTTP ${response.status}\n${text.slice(0, 1200)}`);
+				return;
+			}
+			if (!response.ok) {
+				this.setStatus(`测试失败：HTTP ${response.status}`, true);
+				this.setOutput(text.slice(0, 1200));
+				return;
+			}
+
+			let reply = json?.choices?.[0]?.message?.content || "";
+			if (reply) {
+				this.setStatus("LLM 连接成功");
+				this.setOutput(JSON.stringify({
+					endpoint,
+					model: json?.model || llm.model,
+					reply: reply.trim(),
+					usage: json?.usage || null
+				}, null, 2));
+				return;
+			}
+
+			this.setStatus("已连通，但 LLM 未返回有效回复", true);
+			this.setOutput((json ? JSON.stringify(json, null, 2) : text).slice(0, 1200));
+		}
+		catch (e) {
+			let msg = e?.name === "AbortError" ? "请求超时（30秒）" : (e.message || String(e));
+			this.setStatus("LLM 测试失败：" + msg, true);
+			this.setOutput(msg);
+		}
+		finally {
+			clearTimeout(timeoutID);
+		}
+	},
+
 	init() {
 		if (this.initialized) return;
 		try {
@@ -190,6 +280,15 @@ var ZoteroMineruPreferences = {
 					this.testConnection().catch((e) => {
 						Zotero.logError(e);
 						this.setStatus(`测试失败: ${e.message || e}`, true);
+					});
+				});
+			}
+			let testLLMButton = this.$("mineru-test-llm-button");
+			if (testLLMButton) {
+				testLLMButton.addEventListener("click", () => {
+					this.testLLMConnection().catch((e) => {
+						Zotero.logError(e);
+						this.setStatus(`LLM 测试失败: ${e.message || e}`, true);
 					});
 				});
 			}

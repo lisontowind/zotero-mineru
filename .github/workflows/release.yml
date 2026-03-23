@@ -1,0 +1,89 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read manifest version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tag version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$TAG_VERSION" != "${{ steps.version.outputs.version }}" ]; then
+            echo "Tag version $TAG_VERSION does not match manifest version ${{ steps.version.outputs.version }}" >&2
+            exit 1
+          fi
+
+      - name: Install build dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Build XPI
+        run: bash build-xpi.sh
+
+      - name: Prepare release asset
+        run: |
+          cp "zotero-mineru-${{ steps.version.outputs.version }}.xpi" zotero-mineru.xpi
+
+      - name: Update release metadata
+        run: |
+          REPO="${{ github.repository }}"
+          cat > updates.json <<EOF
+          {
+          	"addons": {
+          		"zotero-mineru@example.com": {
+          			"updates": [
+          				{
+          					"version": "${{ steps.version.outputs.version }}",
+          					"update_link": "https://github.com/${REPO}/releases/latest/download/zotero-mineru.xpi",
+          					"applications": {
+          						"zotero": {
+          							"strict_min_version": "8.0",
+          							"strict_max_version": "8.0.*"
+          						}
+          					}
+          				}
+          			]
+          		}
+          	}
+          }
+          EOF
+
+      - name: Commit metadata to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add updates.json
+          if git diff --cached --quiet; then
+            echo "updates.json already matches the release version"
+            exit 0
+          fi
+          git commit -m "chore: update release metadata for v${{ steps.version.outputs.version }}"
+          git push origin HEAD:main
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: zotero-mineru.xpi

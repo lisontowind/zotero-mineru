@@ -52,22 +52,6 @@ Output file format:
 zotero-mineru-<version>.xpi
 ```
 
-## Updates
-
-Auto-update metadata is stored in `updates.json`.
-`manifest.json` points to:
-
-```text
-https://raw.githubusercontent.com/lisontowind/zotero-mineru/main/updates.json
-```
-
-When releasing a new version:
-
-1. Update `manifest.json` version.
-2. Build new `.xpi`.
-3. Update `updates.json` version and `update_link`.
-4. Create a GitHub release and upload the `.xpi` asset.
-
 ## License
 
 MIT. See [LICENSE](LICENSE).

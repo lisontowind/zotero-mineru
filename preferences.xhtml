@@ -29,9 +29,22 @@
 				<html:label for="mineru-note-title-prefix">笔记标题前缀</html:label>
 				<html:input id="mineru-note-title-prefix" type="text" />
 			</html:div>
+
+			<html:h3>LLM 设置（AI 总结功能）</html:h3>
+			<html:div class="mineru-grid">
+				<html:label for="mineru-llm-api-base-url">LLM API Base URL</html:label>
+				<html:input id="mineru-llm-api-base-url" type="url" placeholder="https://api.deepseek.com/v1" />
+
+				<html:label for="mineru-llm-api-key">LLM API Key</html:label>
+				<html:input id="mineru-llm-api-key" type="password" placeholder="sk-..." />
+
+				<html:label for="mineru-llm-model">LLM 模型名称</html:label>
+				<html:input id="mineru-llm-model" type="text" placeholder="deepseek-chat" />
+			</html:div>
 			<html:div class="mineru-actions">
 				<html:button id="mineru-save-button" type="button">保存</html:button>
-				<html:button id="mineru-test-button" type="button">测试连接</html:button>
+				<html:button id="mineru-test-button" type="button">测试 MinerU 连接</html:button>
+				<html:button id="mineru-test-llm-button" type="button">测试 LLM 连接</html:button>
 				<html:span id="mineru-status"></html:span>
 			</html:div>
 		<html:pre id="mineru-test-output" class="mineru-test-output"></html:pre>

@@ -8,6 +8,7 @@ ZoteroMineru = {
 	
 	PREF_BRANCH: "extensions.zotero-mineru.",
 	CONTEXT_MENU_ID: "zotero-mineru-parse-pdf",
+	SUMMARY_MENU_ID: "zotero-mineru-ai-summary",
 	
 	init({ id, version, rootURI }) {
 		if (this.initialized) return;
@@ -65,6 +66,31 @@ ZoteroMineru = {
 								this.showAlert(window, "MinerU", `执行失败: ${e.message || e}`);
 							});
 						}
+					},
+					{
+						menuType: "menuitem",
+						label: "使用 AI 总结文献 (中文)",
+						l10nID: "zotero-mineru-menu-ai-summary",
+						icon: iconURL,
+						iconURL,
+						image: iconURL,
+						onShowing: (_event, context) => {
+							if (typeof context?.setEnabled === "function") {
+								let selectedItems = Array.isArray(context?.items) ? context.items : [];
+								context.setEnabled(this.collectSummaryTasks(selectedItems).length > 0);
+							}
+						},
+						onCommand: (_event, context) => {
+							let window = context?.menuElem?.ownerGlobal
+								|| Zotero.getMainWindows?.()?.[0]
+								|| null;
+							let selectedItems = Array.isArray(context?.items) ? context.items : null;
+							this.handleSummaryCommand({ window, selectedItems }).catch((e) => {
+								this.log(`Summary command failed: ${e}`);
+								Zotero.logError(e);
+								this.showAlert(window, "MinerU", `AI 总结失败: ${e.message || e}`);
+							});
+						}
 					}
 				]
 			});
@@ -108,11 +134,28 @@ ZoteroMineru = {
 			});
 		});
 		popup.appendChild(menuitem);
-		
+
+		let summaryItem = doc.createXULElement("menuitem");
+		summaryItem.id = this.SUMMARY_MENU_ID;
+		summaryItem.setAttribute("label", "使用 AI 总结文献 (中文)");
+		summaryItem.setAttribute("class", "menuitem-iconic");
+		summaryItem.setAttribute("image", this.getMenuIconURL());
+		summaryItem.style.listStyleImage = `url("${this.getMenuIconURL()}")`;
+		summaryItem.addEventListener("command", () => {
+			this.handleSummaryCommand({ window }).catch((e) => {
+				this.log(`Summary command failed: ${e}`);
+				Zotero.logError(e);
+				this.showAlert(window, "MinerU", `AI 总结失败: ${e.message || e}`);
+			});
+		});
+		popup.appendChild(summaryItem);
+
 		let onPopupShowing = () => {
 			let selectedItems = window.ZoteroPane?.getSelectedItems?.() || [];
 			let tasks = this.collectPDFTasks(selectedItems);
 			menuitem.disabled = !tasks.length;
+			let summaryTasks = this.collectSummaryTasks(selectedItems);
+			summaryItem.disabled = !summaryTasks.length;
 		};
 		popup.addEventListener("popupshowing", onPopupShowing);
 		this.popupListeners.set(window, { popup, onPopupShowing });
@@ -142,6 +185,7 @@ ZoteroMineru = {
 		}
 		let doc = window.document;
 		doc.getElementById(this.CONTEXT_MENU_ID)?.remove();
+		doc.getElementById(this.SUMMARY_MENU_ID)?.remove();
 		let listenerData = this.popupListeners.get(window);
 		if (listenerData) {
 			listenerData.popup.removeEventListener("popupshowing", listenerData.onPopupShowing);
@@ -211,17 +255,30 @@ ZoteroMineru = {
 		};
 	},
 	
+	parentHasNoteWithTag(parentItem, tagName) {
+		if (!parentItem) return false;
+		let noteIDs = parentItem.getNotes();
+		for (let noteID of noteIDs) {
+			let noteItem = Zotero.Items.get(noteID);
+			if (!noteItem) continue;
+			let tags = noteItem.getTags();
+			if (tags.some((t) => t.tag === tagName)) return true;
+		}
+		return false;
+	},
+
 	collectPDFTasks(selectedItems) {
 		let tasks = [];
 		let seenAttachmentIDs = new Set();
-		
+
 		let addTask = (attachment, parentItem) => {
 			if (!attachment || seenAttachmentIDs.has(attachment.id)) return;
 			if (!attachment.isPDFAttachment()) return;
+			if (parentItem && this.parentHasNoteWithTag(parentItem, "#MinerU-Parse")) return;
 			seenAttachmentIDs.add(attachment.id);
 			tasks.push({ attachment, parentItem });
 		};
-		
+
 		for (let item of selectedItems) {
 			if (item.isPDFAttachment()) {
 				let parentItem = item.parentItemID ? Zotero.Items.get(item.parentItemID) : null;
@@ -229,14 +286,14 @@ ZoteroMineru = {
 				continue;
 			}
 			if (!item.isRegularItem()) continue;
-			
+
 			let attachmentIDs = item.getAttachments();
 			for (let attachmentID of attachmentIDs) {
 				let attachment = Zotero.Items.get(attachmentID);
 				addTask(attachment, item);
 			}
 		}
-		
+
 		return tasks;
 	},
 	
@@ -1761,7 +1818,12 @@ ZoteroMineru = {
 			);
 			note.setNote(noteHTML);
 			this.trySetNoteTitle(note, noteTitle);
+			note.addTag("#MinerU-Parse", 0);
 			await note.saveTx();
+			if (parentItem) {
+				parentItem.addTag("#MinerU-Parsed", 0);
+				await parentItem.saveTx();
+			}
 	},
 
 	async materializeEmbeddedImagesForNote({ note, contentHTML, embeddedImages }) {
@@ -1923,5 +1985,201 @@ ZoteroMineru = {
 	
 	async main() {
 		this.log(`Loaded v${this.version}`);
+	},
+
+	getLLMSettings() {
+		let apiBaseURL = (Zotero.Prefs.get(this.PREF_BRANCH + "llmApiBaseURL", true) || "").trim();
+		apiBaseURL = apiBaseURL.replace(/\/+$/, "");
+		let apiKey = (Zotero.Prefs.get(this.PREF_BRANCH + "llmApiKey", true) || "").trim();
+		apiKey = apiKey.replace(/^Bearer\s+/i, "");
+		let model = (Zotero.Prefs.get(this.PREF_BRANCH + "llmModel", true) || "").trim();
+		return { apiBaseURL, apiKey, model };
+	},
+
+	collectSummaryTasks(selectedItems) {
+		let tasks = [];
+		let seenParentIDs = new Set();
+		for (let item of selectedItems) {
+			let parentItem = null;
+			if (item.isNote()) {
+				let pid = item.parentItemID;
+				parentItem = pid ? Zotero.Items.get(pid) : null;
+			} else if (item.isRegularItem()) {
+				parentItem = item;
+			} else if (item.isAttachment()) {
+				let pid = item.parentItemID;
+				parentItem = pid ? Zotero.Items.get(pid) : null;
+			}
+			if (!parentItem || !parentItem.isRegularItem()) continue;
+			if (seenParentIDs.has(parentItem.id)) continue;
+			seenParentIDs.add(parentItem.id);
+			let noteIDs = parentItem.getNotes();
+			let mineruNote = null;
+			for (let noteID of noteIDs) {
+				let noteItem = Zotero.Items.get(noteID);
+				if (!noteItem) continue;
+				let tags = noteItem.getTags();
+				if (tags.some((t) => t.tag === "#MinerU-Parse")) {
+					mineruNote = noteItem;
+					break;
+				}
+			}
+			if (mineruNote) {
+				let hasSummary = this.parentHasNoteWithTag(parentItem, "#MinerU-Summary");
+				if (!hasSummary) {
+					tasks.push({ parentItem, mineruNote });
+				}
+			}
+		}
+		return tasks;
+	},
+
+	async handleSummaryCommand({ window = null, selectedItems = null } = {}) {
+		let llmSettings = this.getLLMSettings();
+		if (!llmSettings.apiBaseURL || !llmSettings.apiKey || !llmSettings.model) {
+			this.showAlert(window, "MinerU", "请先在设置中填写完整的 LLM API 信息（Base URL、API Key、模型名称）。");
+			return;
+		}
+
+		let items = selectedItems
+			|| window?.ZoteroPane?.getSelectedItems?.()
+			|| [];
+		let tasks = this.collectSummaryTasks(items);
+		if (!tasks.length) {
+			this.showAlert(window, "MinerU", "当前选择的条目没有带 #MinerU-Parse 标签的笔记，请先使用 MinerU 解析 PDF。");
+			return;
+		}
+
+		let progress = new Zotero.ProgressWindow({ closeOnClick: true });
+		progress.changeHeadline("AI 文献总结");
+		progress.show();
+
+		let successes = 0;
+		let failures = [];
+
+		for (let task of tasks) {
+			let title = task.parentItem.getField("title") || "未知文献";
+			let itemProgress = new progress.ItemProgress(
+				"chrome://zotero/skin/treeitem-note.png",
+				title
+			);
+			try {
+				if (typeof itemProgress.setText === "function") {
+					itemProgress.setText(`${title}（提取文本）`);
+				}
+				let noteHTML = task.mineruNote.getNote() || "";
+				let plainText = this.stripHTMLToPlainText(noteHTML);
+				if (plainText.length > 60000) {
+					plainText = plainText.slice(0, 60000);
+				}
+				if (!plainText.trim()) {
+					throw new Error("MinerU 笔记内容为空");
+				}
+
+				if (typeof itemProgress.setText === "function") {
+					itemProgress.setText(`${title}（调用 LLM）`);
+				}
+				let summary = await this.callLLMForSummary(plainText, llmSettings);
+
+				if (typeof itemProgress.setText === "function") {
+					itemProgress.setText(`${title}（保存笔记）`);
+				}
+				await this.saveSummaryAsNote({
+					parentItem: task.parentItem,
+					summaryText: summary
+				});
+
+				if (typeof itemProgress.setText === "function") {
+					itemProgress.setText(`${title}（完成）`);
+				}
+				itemProgress.setProgress(100);
+				successes++;
+			} catch (e) {
+				if (typeof itemProgress.setText === "function") {
+					itemProgress.setText(`${title}（失败）`);
+				}
+				itemProgress.setError();
+				failures.push(`${title}: ${e.message || e}`);
+				Zotero.logError(e);
+			}
+		}
+
+		progress.addDescription(`完成 ${successes}/${tasks.length}`);
+		progress.startCloseTimer(5000);
+
+		if (failures.length) {
+			this.showAlert(window, "AI 总结部分失败", failures.slice(0, 10).join("\n"));
+		}
+	},
+
+	async callLLMForSummary(plainText, llmSettings) {
+		let url = `${llmSettings.apiBaseURL}/chat/completions`;
+		let systemPrompt = `你是一位学术研究助手。请根据用户提供的论文内容，用中文撰写一份结构化的学术总结。总结应包含以下几个部分：
+
+## 研究背景
+简要介绍研究领域和背景。
+
+## 研究目的
+明确说明本研究要解决的问题或目标。
+
+## 研究方法
+概述使用的主要方法和技术路线。
+
+## 主要发现
+列出关键的研究结果和发现。
+
+## 结论与意义
+总结研究的主要结论及其学术或实际意义。
+
+请确保总结准确、简洁，忠实于原文内容，不要添加原文中没有的信息。`;
+
+		let payload = {
+			model: llmSettings.model,
+			messages: [
+				{ role: "system", content: systemPrompt },
+				{ role: "user", content: `请总结以下论文内容：\n\n${plainText}` }
+			],
+			temperature: 0.3
+		};
+
+		let doFetch = async () => {
+			let response = await fetch(url, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"Authorization": `Bearer ${llmSettings.apiKey}`
+				},
+				body: JSON.stringify(payload)
+			});
+
+			if (!response.ok) {
+				let errText = await response.text();
+				throw new Error(`LLM API 请求失败 ${response.status}: ${errText.slice(0, 500)}`);
+			}
+
+			let result = await response.json();
+			let content = result?.choices?.[0]?.message?.content;
+			if (!content || !content.trim()) {
+				throw new Error("LLM 返回内容为空");
+			}
+			return content.trim();
+		};
+
+		return await this.withTimeout(doFetch, 120000, "LLM API 请求");
+	},
+
+	async saveSummaryAsNote({ parentItem, summaryText }) {
+		let parentTitle = parentItem.getField("title") || "未知文献";
+		let noteTitle = `AI Summary ${parentTitle}`;
+		let summaryHTML = this.convertMarkdownToBasicHTML(summaryText);
+		let noteHTML = this.ensureNoteTitleInHTML(summaryHTML, noteTitle);
+
+		let note = new Zotero.Item("note");
+		note.libraryID = parentItem.libraryID;
+		note.parentID = parentItem.id;
+		note.setNote(noteHTML);
+		this.trySetNoteTitle(note, noteTitle);
+		note.addTag("#MinerU-Summary", 0);
+		await note.saveTx();
 	}
 };
