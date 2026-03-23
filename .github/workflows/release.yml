@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  create:
 
 permissions:
   contents: write
@@ -12,7 +11,6 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || (github.event_name == 'create' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v'))
 
     steps:
       - name: Checkout tag
