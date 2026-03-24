@@ -3,7 +3,7 @@
 		"zotero-mineru@example.com": {
 			"updates": [
 				{
-					"version": "0.1.49",
+					"version": "0.1.50",
 					"update_link": "https://github.com/lisontowind/zotero-mineru/releases/latest/download/zotero-mineru.xpi",
 					"applications": {
 						"zotero": {
