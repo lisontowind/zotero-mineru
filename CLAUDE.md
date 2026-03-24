@@ -104,6 +104,8 @@ bash build-xpi.sh
 | summaryLanguage | string | `中文` | AI 总结输出语言 |
 | translateLanguage | string | `中文` | AI 翻译目标语言 |
 | translateChunkSize | int | 20000 | 翻译分段字符数（长文分段翻译） |
+| translateConcurrency | int | 3 | 翻译并发请求数（建议 1-4，过高可能触发限流） |
+| translateRetryCount | int | 2 | 每段翻译自动重试次数，超出后再询问是否只重试失败段 |
 
 `apiToken` 有 legacy `apiKey` 回退逻辑。
 
@@ -167,12 +169,13 @@ Parent Item (论文条目)
 
 ## AI 翻译流程
 
-1. `getLLMSettings()` 校验 LLM 设置完整性，获取 `translateLanguage` 和 `translateChunkSize`
+1. `getLLMSettings()` 校验 LLM 设置完整性，获取 `translateLanguage`、`translateChunkSize`、`translateConcurrency`、`translateRetryCount`
 2. `collectTranslateTasks()` 查找 `#MinerU-Parse` 标签的附件，检查 `#MinerU-Translation` 附件去重
 3. 读取 `.md` 文件全文 → `splitMarkdownIntoChunks()` 按标题/段落分段
-4. 逐段调用 `callLLMForTranslation()`，180 秒超时，system prompt 要求保持 Markdown 格式
-5. 拼接翻译结果 → `saveTranslationAsMarkdownAttachment()` 保存为 Markdown 附件
-6. 文件名格式：`Translation ({language}) - {sourceTitle}.md`，标签 `#MinerU-Translation`
+4. 使用限流并发逐段调用 `callLLMForTranslation()`，默认并发 3，每段失败时先自动重试
+5. 自动重试耗尽后，等本轮所有段落跑完，再弹窗询问是否只重试失败段
+6. 所有段落成功后，按原分段顺序统一合成结果，再调用 `saveTranslationAsMarkdownAttachment()` 保存为 Markdown 附件
+7. 文件名格式：`Translation ({language}) - {sourceTitle}.md`，标签 `#MinerU-Translation`
 
 ### 分段策略
 

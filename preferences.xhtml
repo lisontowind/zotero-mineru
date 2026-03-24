@@ -30,7 +30,7 @@
 			<html:input id="mineru-note-title-prefix" type="text" />
 		</html:div>
 
-		<html:h3>LLM 设置（AI 总结功能）</html:h3>
+		<html:h3>LLM 设置（AI 总结 / 翻译功能）</html:h3>
 		<html:div class="mineru-grid">
 			<html:label for="mineru-llm-api-base-url">LLM API Base URL</html:label>
 			<html:input id="mineru-llm-api-base-url" type="url" placeholder="https://api.deepseek.com/v1" />
@@ -65,6 +65,12 @@
 
 			<html:label for="mineru-translate-chunk-size">翻译分段字符数</html:label>
 			<html:input id="mineru-translate-chunk-size" type="number" min="5000" max="60000" step="1000" />
+
+			<html:label for="mineru-translate-concurrency">翻译并发请求数</html:label>
+			<html:input id="mineru-translate-concurrency" type="number" min="1" max="8" step="1" />
+
+			<html:label for="mineru-translate-retry-count">翻译自动重试次数</html:label>
+			<html:input id="mineru-translate-retry-count" type="number" min="1" max="5" step="1" />
 		</html:div>
 		<html:div class="mineru-actions">
 			<html:button id="mineru-save-button" type="button">保存</html:button>

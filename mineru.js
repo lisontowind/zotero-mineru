@@ -361,6 +361,22 @@ ZoteroMineru = {
 		this.log(`${title}: ${message}`);
 	},
 
+	showConfirm(window, title, message) {
+		try {
+			if (typeof Services !== "undefined" && Services.prompt?.confirm) {
+				return Services.prompt.confirm(window || null, title, message);
+			}
+		}
+		catch (e) {
+			Zotero.logError(e);
+		}
+		if (window?.confirm) {
+			return window.confirm(message);
+		}
+		this.log(`${title}: ${message}`);
+		return false;
+	},
+
 	async handleParseCommand({ window = null, selectedItems = null } = {}) {
 		let settings = this.getSettings();
 		if (!settings.apiToken) {
@@ -2104,7 +2120,11 @@ ZoteroMineru = {
 		let timeoutID = null;
 		let timeoutPromise = new Promise((_, reject) => {
 			timeoutID = setTimeout(() => {
-				reject(new Error(`${label}超时`));
+				let error = new Error(`${label}超时（${Math.ceil(timeoutMS / 1000)}秒）`);
+				error.name = "TimeoutError";
+				error.code = "ETIMEDOUT";
+				error.timeoutMS = timeoutMS;
+				reject(error);
 			}, timeoutMS);
 		});
 		try {
@@ -2118,6 +2138,50 @@ ZoteroMineru = {
 				clearTimeout(timeoutID);
 			}
 		}
+	},
+
+	isTimeoutError(error) {
+		return !!(error && (error.name === "TimeoutError" || error.code === "ETIMEDOUT"));
+	},
+
+	formatUserFacingError(error, fallbackMessage = "执行失败") {
+		let message = error?.message || String(error || fallbackMessage)
+		if (!message) return fallbackMessage
+		if (this.isTimeoutError(error)) {
+			return `${message}。可尝试减小“翻译并发请求数”或“翻译分段字符数”后重试。`
+		}
+		return message
+	},
+
+	buildChunkFailureMessage(failure) {
+		let chunkLabel = `第 ${failure.chunkIndex + 1}/${failure.totalChunks} 段`
+		let attemptsLabel = failure.attempts > 1 ? `（已尝试 ${failure.attempts} 次）` : ""
+		return `${chunkLabel}${attemptsLabel}: ${this.formatUserFacingError(failure.error, "翻译失败")}`
+	},
+
+	buildFailedChunkSummary(failures, limit = 10) {
+		return failures
+			.slice(0, limit)
+			.map((failure) => this.buildChunkFailureMessage(failure))
+			.join("\n")
+	},
+
+	confirmRetryFailedChunks(window, { title, failures, retryRound, autoRetryCount }) {
+		if (!failures.length) return false
+		let summary = this.buildFailedChunkSummary(failures, 8)
+		let hiddenCount = Math.max(failures.length - 8, 0)
+		let message =
+			`${title}\n\n` +
+			`以下段落在自动重试 ${autoRetryCount} 次后仍然失败：\n` +
+			`${summary}`
+		if (hiddenCount) {
+			message += `\n… 另有 ${hiddenCount} 段失败`
+		}
+		message += `\n\n是否现在只重试这些失败段落？`
+		if (retryRound > 1) {
+			message += `\n这是第 ${retryRound} 轮人工确认重试。`
+		}
+		return this.showConfirm(window, "AI 翻译失败段重试", message)
 	},
 
 	replaceImageMarkerWithAttachment(html, marker, attachmentKey, mimeType, fileName) {
@@ -2199,7 +2263,22 @@ ZoteroMineru = {
 		let translateLanguage = (Zotero.Prefs.get(this.PREF_BRANCH + "translateLanguage", true) || "中文").trim();
 		let translateChunkSize = Zotero.Prefs.get(this.PREF_BRANCH + "translateChunkSize", true);
 		if (!Number.isFinite(translateChunkSize) || translateChunkSize < 5000) translateChunkSize = 20000;
-		return { apiBaseURL, apiKey, model, summaryLanguage, translateLanguage, translateChunkSize };
+		let translateConcurrency = parseInt(Zotero.Prefs.get(this.PREF_BRANCH + "translateConcurrency", true), 10);
+		if (!Number.isFinite(translateConcurrency) || translateConcurrency < 1) translateConcurrency = 3;
+		if (translateConcurrency > 8) translateConcurrency = 8;
+		let translateRetryCount = parseInt(Zotero.Prefs.get(this.PREF_BRANCH + "translateRetryCount", true), 10);
+		if (!Number.isFinite(translateRetryCount) || translateRetryCount < 1) translateRetryCount = 2;
+		if (translateRetryCount > 5) translateRetryCount = 5;
+		return {
+			apiBaseURL,
+			apiKey,
+			model,
+			summaryLanguage,
+			translateLanguage,
+			translateChunkSize,
+			translateConcurrency,
+			translateRetryCount
+		};
 	},
 
 	collectSummaryTasks(selectedItems) {
@@ -2507,6 +2586,8 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 
 		let language = llmSettings.translateLanguage || "中文"
 		let chunkSize = llmSettings.translateChunkSize || 20000
+		let translateConcurrency = llmSettings.translateConcurrency || 3
+		let translateRetryCount = llmSettings.translateRetryCount || 2
 
 		let progress = new Zotero.ProgressWindow({ closeOnClick: true })
 		progress.changeHeadline(`AI 文献翻译 → ${language}`)
@@ -2535,16 +2616,69 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 
 				// Split into chunks for translation
 				let chunks = this.splitMarkdownIntoChunks(fullText, chunkSize)
-				let translatedParts = []
+				let translatedParts = new Array(chunks.length)
+				let activeConcurrency = Math.min(translateConcurrency, chunks.length)
+				let pendingChunkIndexes = chunks.map((_chunk, index) => index)
+				let retryRound = 0
 
-				for (let i = 0; i < chunks.length; i++) {
+				while (pendingChunkIndexes.length) {
+					let batchLabel = retryRound ? `重试第 ${retryRound} 轮` : "翻译"
 					if (typeof itemProgress.setText === "function") {
-						itemProgress.setText(`${title}（翻译 ${i + 1}/${chunks.length}）`)
+						itemProgress.setText(`${title}（${batchLabel} 0/${pendingChunkIndexes.length}，并发 ${activeConcurrency}）`)
 					}
-					let translated = await this.callLLMForTranslation(chunks[i], language, llmSettings, i + 1, chunks.length)
-					translatedParts.push(translated)
+					let batchResult = await this.translateChunksWithConcurrency({
+						chunks,
+						chunkIndexes: pendingChunkIndexes,
+						concurrency: activeConcurrency,
+						autoRetryCount: translateRetryCount,
+						translateChunk: (chunk, chunkIndex, totalChunks) => {
+							return this.callLLMForTranslation(chunk, language, llmSettings, chunkIndex + 1, totalChunks)
+						},
+						onProgress: ({ completed, total }) => {
+							let progressLabel = retryRound ? `重试第 ${retryRound} 轮` : "翻译"
+							if (typeof itemProgress.setText === "function") {
+								itemProgress.setText(`${title}（${progressLabel} ${completed}/${total}，并发 ${activeConcurrency}）`)
+							}
+						}
+					})
+
+					for (let [chunkIndex, translated] of batchResult.successes.entries()) {
+						translatedParts[chunkIndex] = translated
+					}
+
+					if (!batchResult.failures.length) {
+						break
+					}
+
+					if (typeof itemProgress.setText === "function") {
+						itemProgress.setText(`${title}（等待确认重试失败段落）`)
+					}
+					retryRound++
+					let shouldRetryFailures = this.confirmRetryFailedChunks(window, {
+						title,
+						failures: batchResult.failures,
+						retryRound,
+						autoRetryCount: translateRetryCount
+					})
+					if (!shouldRetryFailures) {
+						throw new Error(this.buildFailedChunkSummary(batchResult.failures, 10) || "部分段落翻译失败")
+					}
+					pendingChunkIndexes = batchResult.failures.map((failure) => failure.chunkIndex)
+					if (typeof itemProgress.setText === "function") {
+						itemProgress.setText(`${title}（准备重试失败段落 ${pendingChunkIndexes.length} 段）`)
+					}
 				}
 
+				if (translatedParts.some((part) => typeof part !== "string" || !part.trim())) {
+					let missingChunks = translatedParts
+						.map((part, index) => (typeof part === "string" && part.trim()) ? null : `第 ${index + 1}/${translatedParts.length} 段`)
+						.filter(Boolean)
+					throw new Error(`仍有未完成段落，无法合成结果：${missingChunks.slice(0, 10).join("，")}`)
+				}
+
+				if (typeof itemProgress.setText === "function") {
+					itemProgress.setText(`${title}（合成翻译结果）`)
+				}
 				let translatedText = translatedParts.join("\n\n")
 
 				if (typeof itemProgress.setText === "function") {
@@ -2564,15 +2698,18 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 				successes++
 			} catch (e) {
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（失败）`)
+					itemProgress.setText(`${title}（${this.isTimeoutError(e) ? "超时" : "失败"}）`)
 				}
 				itemProgress.setError()
-				failures.push(`${title}: ${e.message || e}`)
+				failures.push(`${title}: ${this.formatUserFacingError(e, "翻译失败")}`)
 				Zotero.logError(e)
 			}
 		}
 
 		progress.addDescription(`完成 ${successes}/${tasks.length}`)
+		if (failures.length) {
+			progress.addDescription(`失败 ${failures.length}/${tasks.length}`)
+		}
 		progress.startCloseTimer(5000)
 
 		if (failures.length) {
@@ -2628,6 +2765,82 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 		if (currentChunk) chunks.push(currentChunk)
 
 		return chunks
+	},
+
+	async translateChunkWithRetry({ chunkText, chunkIndex, totalChunks, autoRetryCount, translateChunk }) {
+		let maxAttempts = Math.max(autoRetryCount || 0, 0) + 1
+		let lastError = null
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			try {
+				let translated = await translateChunk(chunkText, chunkIndex, totalChunks)
+				return {
+					ok: true,
+					chunkIndex,
+					totalChunks,
+					attempts: attempt,
+					translated
+				}
+			} catch (e) {
+				lastError = e
+				Zotero.logError(e)
+			}
+		}
+		return {
+			ok: false,
+			chunkIndex,
+			totalChunks,
+			attempts: maxAttempts,
+			error: lastError || new Error("翻译失败")
+		}
+	},
+
+	async translateChunksWithConcurrency({ chunks, chunkIndexes = null, concurrency, autoRetryCount, translateChunk, onProgress = null }) {
+		if (!Array.isArray(chunks) || !chunks.length) {
+			return { successes: new Map(), failures: [] }
+		}
+
+		let targets = Array.isArray(chunkIndexes) && chunkIndexes.length
+			? [...chunkIndexes]
+			: chunks.map((_chunk, index) => index)
+		let successes = new Map()
+		let failures = []
+		let nextIndex = 0
+		let completed = 0
+		let workerCount = Math.min(Math.max(concurrency || 1, 1), targets.length)
+
+		let worker = async () => {
+			while (true) {
+				let currentTargetIndex = nextIndex++
+				if (currentTargetIndex >= targets.length) return
+				let chunkIndex = targets[currentTargetIndex]
+				let result = await this.translateChunkWithRetry({
+					chunkText: chunks[chunkIndex],
+					chunkIndex,
+					totalChunks: chunks.length,
+					autoRetryCount,
+					translateChunk
+				})
+				if (result.ok) {
+					successes.set(chunkIndex, result.translated)
+				} else {
+					failures.push(result)
+				}
+				completed++
+				if (typeof onProgress === "function") {
+					onProgress({
+						completed,
+						total: targets.length,
+						chunkIndex,
+						successes: successes.size,
+						failures: failures.length
+					})
+				}
+			}
+		}
+
+		await Promise.all(Array.from({ length: workerCount }, () => worker()))
+		failures.sort((a, b) => a.chunkIndex - b.chunkIndex)
+		return { successes, failures }
 	},
 
 	async callLLMForTranslation(text, language, llmSettings, chunkIndex, totalChunks) {

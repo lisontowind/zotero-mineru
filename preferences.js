@@ -14,7 +14,9 @@ var ZoteroMineruPreferences = {
 		{ id: "mineru-llm-model", pref: "llmModel", type: "string" },
 		{ id: "mineru-summary-language", pref: "summaryLanguage", type: "string" },
 		{ id: "mineru-translate-language", pref: "translateLanguage", type: "string" },
-		{ id: "mineru-translate-chunk-size", pref: "translateChunkSize", type: "int" }
+		{ id: "mineru-translate-chunk-size", pref: "translateChunkSize", type: "int" },
+		{ id: "mineru-translate-concurrency", pref: "translateConcurrency", type: "int" },
+		{ id: "mineru-translate-retry-count", pref: "translateRetryCount", type: "int" }
 	],
 
 	$(id) {

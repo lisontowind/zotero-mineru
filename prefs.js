@@ -10,3 +10,5 @@ pref("extensions.zotero-mineru.llmModel", "");
 pref("extensions.zotero-mineru.summaryLanguage", "中文");
 pref("extensions.zotero-mineru.translateLanguage", "中文");
 pref("extensions.zotero-mineru.translateChunkSize", 20000);
+pref("extensions.zotero-mineru.translateConcurrency", 3);
+pref("extensions.zotero-mineru.translateRetryCount", 2);
