@@ -1957,6 +1957,48 @@ ZoteroMineru = {
 		return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/\s+/g, " ").trim()
 	},
 
+	rewriteTranslationImageLinksToSourceStorage(markdownText, sourceAttachment) {
+		let sourceKey = sourceAttachment?.key
+		if (!sourceKey) return markdownText
+
+		let rewriteURL = (url) => {
+			let cleanURL = String(url || "").trim()
+			if (!cleanURL) return cleanURL
+			if (/^(https?:|\/\/|#|data:|attachments:)/i.test(cleanURL)) return cleanURL
+			if (cleanURL.startsWith(`../${sourceKey}/`)) return cleanURL
+
+			let normalized = cleanURL
+				.replace(/\\/g, "/")
+				.replace(/^\.\/+/, "")
+				.replace(/^\/+/, "")
+			if (!normalized || normalized.startsWith("../")) return cleanURL
+
+			return `../${sourceKey}/${normalized}`
+		}
+
+		let result = String(markdownText || "").replace(
+			/!\[([^\]]*)\]\(([^)]+)\)/g,
+			(match, alt, rawTarget) => {
+				let targetInfo = this.parseMarkdownImageTarget(rawTarget)
+				let url = rewriteURL(targetInfo?.url || rawTarget)
+				if (url === (targetInfo?.url || rawTarget)) return match
+				let titlePart = targetInfo?.title ? ` "${targetInfo.title}"` : ""
+				return `![${alt}](${url}${titlePart})`
+			}
+		)
+
+		result = result.replace(
+			/<img\b([^>]*?)\bsrc=(["'])([^"']+)\2([^>]*)>/gi,
+			(match, before, quote, src, after) => {
+				let rewritten = rewriteURL(src)
+				if (rewritten === src) return match
+				return `<img${before}src=${quote}${rewritten}${quote}${after}>`
+			}
+		)
+
+		return result
+	},
+
 	async saveResultAsMarkdownAttachment({ attachment, parentItem, parsedResult, settings }) {
 		let attachmentTitle = attachment.getField("title")
 			|| this.fileNameFromPath(attachment.getFilePath() || "PDF")
@@ -2885,7 +2927,8 @@ Rules:
 		)
 		await IOUtils.makeDirectory(tempDir, { createAncestors: true })
 		let mdTempPath = PathUtils.join(tempDir, mdFileName)
-		await IOUtils.writeUTF8(mdTempPath, translatedText)
+		let rewrittenText = this.rewriteTranslationImageLinksToSourceStorage(translatedText, sourceAttachment)
+		await IOUtils.writeUTF8(mdTempPath, rewrittenText)
 
 		try {
 			let mdAttachment = await Zotero.Attachments.importFromFile({
@@ -2899,7 +2942,7 @@ Rules:
 			mdAttachment.addTag("#MinerU-Translation", 0)
 			await mdAttachment.saveTx()
 
-			this.log(`翻译附件已保存: ${mdFileName}`)
+			this.log(`翻译附件已保存: ${mdFileName} (图片链接已指向源附件 ${sourceAttachment?.key || "unknown"})`)
 		}
 		finally {
 			await IOUtils.remove(mdTempPath).catch(() => {})
