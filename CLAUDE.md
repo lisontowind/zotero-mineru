@@ -49,6 +49,22 @@ bash build-xpi.sh
 3. 更新 updates.json 中的下载链接并提交回 main
 4. 创建 GitHub Release（附带 XPI 文件）
 
+### 手动发布新版本的实际顺序
+
+当用户要求“发布新版本”时，按下面顺序执行，避免 tag 指向错误提交：
+
+1. 先把 `manifest.json` 的 `"version"` 递增到目标版本
+2. 如需本地验证，执行 `bash build-xpi.sh`，确认生成的 `.xpi` 文件名包含新版本号
+3. 提交版本变更并先 `git push origin main`
+4. 创建与 `manifest.json` 一致的 tag，例如 `git tag v0.1.49`
+5. 推送 tag：`git push origin v0.1.49`
+6. 等待 GitHub Actions `release.yml` 完成发布
+
+补充说明：
+- `release.yml` 会重新生成 `updates.json`，并仅在文件内容发生变化时自动提交回 `main`
+- 如果 `main` 上的 `updates.json` 已经是目标版本和正确下载链接，workflow 不会再额外创建一个回写提交
+- 真正触发 GitHub Release 和 XPI 上传的是 `v*` tag，不是 `main` 分支提交
+
 ## 架构要点
 
 ### 插件加载流程
