@@ -48,10 +48,16 @@ Open `Edit -> Preferences -> MinerU` and configure the following as needed:
 - `LLM API Key`
 - `LLM Model`
 - `Summary Language`
+- `Summary Extra JSON Params`
 - `Translate Language`
 - `Translate Chunk Size`
 - `Translate Concurrency`
 - `Translate Retry Count`
+- `Translate Extra JSON Params`
+
+`Summary Extra JSON Params` is merged directly into the summary request body as a JSON object. Use it for model-specific flags such as `{"enable_thinking": true}`. `model` and `messages` are reserved and cannot be overridden there.
+
+`Translate Extra JSON Params` is merged directly into the translation request body as a JSON object. Use it for model-specific flags such as `{"enable_thinking": true}`. `model` and `messages` are reserved and cannot be overridden there.
 
 ## Usage
 

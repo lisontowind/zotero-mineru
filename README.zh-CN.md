@@ -48,10 +48,16 @@
 - `LLM API Key`
 - `LLM Model`
 - `Summary Language`
+- `Summary Extra JSON Params`
 - `Translate Language`
 - `Translate Chunk Size`
 - `Translate Concurrency`
 - `Translate Retry Count`
+- `Translate Extra JSON Params`
+
+`Summary Extra JSON Params` 会作为 JSON 对象直接合并进总结接口请求体，可用于 `{"enable_thinking": true}` 这类模型专属参数。`model` 和 `messages` 属于保留字段，不能在这里覆盖。
+
+`Translate Extra JSON Params` 会作为 JSON 对象直接合并进翻译接口请求体，可用于 `{"enable_thinking": true}` 这类模型专属参数。`model` 和 `messages` 属于保留字段，不能在这里覆盖。
 
 ## 使用方法
 

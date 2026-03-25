@@ -2278,6 +2278,7 @@ ZoteroMineru = {
 		apiKey = apiKey.replace(/^Bearer\s+/i, "");
 		let model = (Zotero.Prefs.get(this.PREF_BRANCH + "llmModel", true) || "").trim();
 		let summaryLanguage = (Zotero.Prefs.get(this.PREF_BRANCH + "summaryLanguage", true) || "中文").trim();
+		let summaryRequestJSON = (Zotero.Prefs.get(this.PREF_BRANCH + "summaryRequestJSON", true) || "").trim();
 		let translateLanguage = (Zotero.Prefs.get(this.PREF_BRANCH + "translateLanguage", true) || "中文").trim();
 		let translateChunkSize = Zotero.Prefs.get(this.PREF_BRANCH + "translateChunkSize", true);
 		if (!Number.isFinite(translateChunkSize) || translateChunkSize < 5000) translateChunkSize = 20000;
@@ -2287,16 +2288,49 @@ ZoteroMineru = {
 		let translateRetryCount = parseInt(Zotero.Prefs.get(this.PREF_BRANCH + "translateRetryCount", true), 10);
 		if (!Number.isFinite(translateRetryCount) || translateRetryCount < 1) translateRetryCount = 2;
 		if (translateRetryCount > 5) translateRetryCount = 5;
+		let translateRequestJSON = (Zotero.Prefs.get(this.PREF_BRANCH + "translateRequestJSON", true) || "").trim();
 		return {
 			apiBaseURL,
 			apiKey,
 			model,
 			summaryLanguage,
+			summaryRequestJSON,
 			translateLanguage,
 			translateChunkSize,
 			translateConcurrency,
-			translateRetryCount
+			translateRetryCount,
+			translateRequestJSON
 		};
+	},
+
+	parseOptionalJSONObject(rawValue, fieldLabel) {
+		let normalized = String(rawValue || "").trim();
+		if (!normalized) return {};
+		let parsed;
+		try {
+			parsed = JSON.parse(normalized);
+		}
+		catch (e) {
+			throw new Error(`${fieldLabel} 不是合法 JSON：${e.message || e}`);
+		}
+		if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+			throw new Error(`${fieldLabel} 必须是 JSON 对象`);
+		}
+		return parsed;
+	},
+
+	mergeRequestPayload(basePayload, extraPayload, reservedKeys = []) {
+		let mergedPayload = { ...basePayload };
+		if (!extraPayload || typeof extraPayload !== "object") {
+			return mergedPayload;
+		}
+		for (let [key, value] of Object.entries(extraPayload)) {
+			if (reservedKeys.includes(key)) {
+				throw new Error(`翻译额外 JSON 参数不能覆盖保留字段：${reservedKeys.join(", ")}`);
+			}
+			mergedPayload[key] = value;
+		}
+		return mergedPayload;
 	},
 
 	collectSummaryTasks(selectedItems) {
@@ -2362,6 +2396,15 @@ ZoteroMineru = {
 		let llmSettings = this.getLLMSettings();
 		if (!llmSettings.apiBaseURL || !llmSettings.apiKey || !llmSettings.model) {
 			this.showAlert(window, "MinerU", "请先在设置中填写完整的 LLM API 信息（Base URL、API Key、模型名称）。");
+			return;
+		}
+		try {
+			llmSettings.summaryRequestParams = this.parseOptionalJSONObject(
+				llmSettings.summaryRequestJSON,
+				"总结额外 JSON 参数"
+			);
+		} catch (e) {
+			this.showAlert(window, "MinerU", e.message || String(e));
 			return;
 		}
 
@@ -2500,6 +2543,11 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 			],
 			temperature: 0.3
 		};
+		payload = this.mergeRequestPayload(
+			payload,
+			llmSettings.summaryRequestParams,
+			["model", "messages"]
+		);
 
 		let doFetch = async () => {
 			let response = await fetch(url, {
@@ -2590,6 +2638,15 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 		let llmSettings = this.getLLMSettings()
 		if (!llmSettings.apiBaseURL || !llmSettings.apiKey || !llmSettings.model) {
 			this.showAlert(window, "MinerU", "请先在设置中填写完整的 LLM API 信息（Base URL、API Key、模型名称）。")
+			return
+		}
+		try {
+			llmSettings.translateRequestParams = this.parseOptionalJSONObject(
+				llmSettings.translateRequestJSON,
+				"翻译额外 JSON 参数"
+			)
+		} catch (e) {
+			this.showAlert(window, "MinerU", e.message || String(e))
 			return
 		}
 
@@ -2887,6 +2944,11 @@ Rules:
 			],
 			temperature: 0.3
 		}
+		payload = this.mergeRequestPayload(
+			payload,
+			llmSettings.translateRequestParams,
+			["model", "messages"]
+		)
 
 		let doFetch = async () => {
 			let response = await fetch(url, {

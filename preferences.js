@@ -13,10 +13,12 @@ var ZoteroMineruPreferences = {
 		{ id: "mineru-llm-api-key", pref: "llmApiKey", type: "string" },
 		{ id: "mineru-llm-model", pref: "llmModel", type: "string" },
 		{ id: "mineru-summary-language", pref: "summaryLanguage", type: "string" },
+		{ id: "mineru-summary-request-json", pref: "summaryRequestJSON", type: "string" },
 		{ id: "mineru-translate-language", pref: "translateLanguage", type: "string" },
 		{ id: "mineru-translate-chunk-size", pref: "translateChunkSize", type: "int" },
 		{ id: "mineru-translate-concurrency", pref: "translateConcurrency", type: "int" },
-		{ id: "mineru-translate-retry-count", pref: "translateRetryCount", type: "int" }
+		{ id: "mineru-translate-retry-count", pref: "translateRetryCount", type: "int" },
+		{ id: "mineru-translate-request-json", pref: "translateRequestJSON", type: "string" }
 	],
 
 	$(id) {
@@ -34,6 +36,36 @@ var ZoteroMineruPreferences = {
 		if (!status) return;
 		status.textContent = message || "";
 		status.style.color = isError ? "#b03232" : "#1d6e36";
+	},
+
+	parseOptionalJSONObject(rawValue, fieldLabel) {
+		let normalized = String(rawValue || "").trim();
+		if (!normalized) return {};
+		let parsed;
+		try {
+			parsed = JSON.parse(normalized);
+		}
+		catch (e) {
+			throw new Error(`${fieldLabel} 不是合法 JSON：${e.message || e}`);
+		}
+		if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+			throw new Error(`${fieldLabel} 必须是 JSON 对象`);
+		}
+		return parsed;
+	},
+
+	mergeRequestPayload(basePayload, extraPayload, reservedKeys = []) {
+		let mergedPayload = { ...basePayload };
+		if (!extraPayload || typeof extraPayload !== "object") {
+			return mergedPayload;
+		}
+		for (let [key, value] of Object.entries(extraPayload)) {
+			if (reservedKeys.includes(key)) {
+				throw new Error(`额外 JSON 参数不能覆盖保留字段：${reservedKeys.join(", ")}`);
+			}
+			mergedPayload[key] = value;
+		}
+		return mergedPayload;
 	},
 
 	loadSettings() {
@@ -66,6 +98,20 @@ var ZoteroMineruPreferences = {
 				Zotero.Prefs.set(this.PREF_BRANCH + field.pref, intValue, true);
 				continue;
 			}
+			if (["summaryRequestJSON", "translateRequestJSON"].includes(field.pref)) {
+				try {
+					let fieldLabel = field.pref === "summaryRequestJSON"
+						? "总结额外 JSON 参数"
+						: "翻译额外 JSON 参数";
+					this.parseOptionalJSONObject(value, fieldLabel);
+				}
+				catch (e) {
+					if (!silent) {
+						this.setStatus(e.message || String(e), true);
+					}
+					return false;
+				}
+			}
 			if (field.pref === "apiToken") {
 				value = value.replace(/^Bearer\s+/i, "");
 			}
@@ -74,6 +120,7 @@ var ZoteroMineruPreferences = {
 		if (!silent) {
 			this.setStatus("已保存");
 		}
+		return true;
 	},
 
 	readCurrentSettings() {
@@ -190,39 +237,21 @@ var ZoteroMineruPreferences = {
 		let apiKey = (Zotero.Prefs.get(this.PREF_BRANCH + "llmApiKey", true) || "").trim();
 		apiKey = apiKey.replace(/^Bearer\s+/i, "");
 		let model = (Zotero.Prefs.get(this.PREF_BRANCH + "llmModel", true) || "").trim();
-		return { apiBaseURL, apiKey, model };
+		let summaryRequestJSON = (Zotero.Prefs.get(this.PREF_BRANCH + "summaryRequestJSON", true) || "").trim();
+		let translateRequestJSON = (Zotero.Prefs.get(this.PREF_BRANCH + "translateRequestJSON", true) || "").trim();
+		return { apiBaseURL, apiKey, model, summaryRequestJSON, translateRequestJSON };
 	},
 
-	async testLLMConnection() {
-		this.saveSettings({ silent: true });
-		let llm = this.readLLMSettings();
-		if (!llm.apiBaseURL || !llm.apiKey || !llm.model) {
-			this.setStatus("测试失败：LLM 设置不完整", true);
-			this.setOutput("请先填写 LLM API Base URL、API Key 和模型名称。");
-			return;
-		}
-
-		let endpoint = llm.apiBaseURL + "/chat/completions";
-		let payload = {
-			model: llm.model,
-			messages: [
-				{ role: "user", content: "Hi, reply with one word to confirm connectivity." }
-			],
-			max_tokens: 16
-		};
-
+	async sendLLMTestRequest({ endpoint, apiKey, payload, timeoutMS = 30000 }) {
 		let controller = new AbortController();
-		let timeoutID = setTimeout(() => controller.abort(), 30000);
+		let timeoutID = setTimeout(() => controller.abort(), timeoutMS);
 		try {
-			this.setStatus("正在测试 LLM 连接...");
-			this.setOutput(`POST ${endpoint}\n模型: ${llm.model}\nKey长度: ${llm.apiKey.length}`);
-
 			let response = await fetch(endpoint, {
 				method: "POST",
 				headers: {
 					"Accept": "application/json",
 					"Content-Type": "application/json",
-					"Authorization": "Bearer " + llm.apiKey
+					"Authorization": "Bearer " + apiKey
 				},
 				body: JSON.stringify(payload),
 				signal: controller.signal
@@ -236,38 +265,141 @@ var ZoteroMineruPreferences = {
 			catch (_e) {}
 
 			if (response.status === 401 || response.status === 403) {
-				this.setStatus("测试失败：API Key 无效或权限不足", true);
-				this.setOutput(`HTTP ${response.status}\n${text.slice(0, 1200)}`);
-				return;
+				throw new Error(`API Key 无效或权限不足（HTTP ${response.status}）`);
 			}
 			if (!response.ok) {
-				this.setStatus(`测试失败：HTTP ${response.status}`, true);
-				this.setOutput(text.slice(0, 1200));
-				return;
+				throw new Error(`HTTP ${response.status}: ${text.slice(0, 500)}`);
 			}
 
 			let reply = json?.choices?.[0]?.message?.content || "";
-			if (reply) {
-				this.setStatus("LLM 连接成功");
+			if (!reply) {
+				throw new Error("LLM 未返回有效回复");
+			}
+
+			return {
+				model: json?.model || payload.model,
+				reply: reply.trim(),
+				usage: json?.usage || null
+			};
+		}
+		catch (e) {
+			if (e?.name === "AbortError") {
+				throw new Error(`请求超时（${Math.round(timeoutMS / 1000)}秒）`);
+			}
+			throw e;
+		}
+		finally {
+			clearTimeout(timeoutID);
+		}
+	},
+
+	async testLLMConnection() {
+		if (!this.saveSettings()) return;
+		let llm = this.readLLMSettings();
+		if (!llm.apiBaseURL || !llm.apiKey || !llm.model) {
+			this.setStatus("测试失败：LLM 设置不完整", true);
+			this.setOutput("请先填写 LLM API Base URL、API Key 和模型名称。");
+			return;
+		}
+
+		let endpoint = llm.apiBaseURL + "/chat/completions";
+		try {
+			let summaryRequestParams = this.parseOptionalJSONObject(llm.summaryRequestJSON, "总结额外 JSON 参数");
+			let translateRequestParams = this.parseOptionalJSONObject(llm.translateRequestJSON, "翻译额外 JSON 参数");
+			let testCases = [
+				{
+					label: "summary",
+					description: "总结配置",
+					extraParams: summaryRequestParams,
+					payload: {
+						model: llm.model,
+						messages: [
+							{ role: "system", content: "You are testing the current summary request configuration. Reply with exactly OK." },
+							{ role: "user", content: "Return exactly OK." }
+						],
+						max_tokens: 16
+					}
+				},
+				{
+					label: "translation",
+					description: "翻译配置",
+					extraParams: translateRequestParams,
+					payload: {
+						model: llm.model,
+						messages: [
+							{ role: "system", content: "You are testing the current translation request configuration. Reply with exactly OK." },
+							{ role: "user", content: "Return exactly OK." }
+						],
+						max_tokens: 16
+					}
+				}
+			];
+
+			this.setStatus("正在测试当前 LLM 配置...");
+			this.setOutput(JSON.stringify({
+				endpoint,
+				model: llm.model,
+				keyLength: llm.apiKey.length,
+				tests: testCases.map((testCase) => ({
+					type: testCase.label,
+					extraParams: testCase.extraParams
+				}))
+			}, null, 2));
+
+			let results = [];
+			let failures = [];
+			for (let testCase of testCases) {
+				let payload = this.mergeRequestPayload(
+					testCase.payload,
+					testCase.extraParams,
+					["model", "messages"]
+				);
+				try {
+					let result = await this.sendLLMTestRequest({
+						endpoint,
+						apiKey: llm.apiKey,
+						payload
+					});
+					results.push({
+						type: testCase.label,
+						status: "ok",
+						model: result.model,
+						reply: result.reply,
+						usage: result.usage,
+						extraParams: testCase.extraParams
+					});
+				}
+				catch (e) {
+					failures.push({
+						type: testCase.label,
+						error: e.message || String(e),
+						extraParams: testCase.extraParams
+					});
+				}
+			}
+
+			if (failures.length) {
+				this.setStatus("当前 LLM 配置测试失败", true);
 				this.setOutput(JSON.stringify({
 					endpoint,
-					model: json?.model || llm.model,
-					reply: reply.trim(),
-					usage: json?.usage || null
+					model: llm.model,
+					successes: results,
+					failures
 				}, null, 2));
 				return;
 			}
 
-			this.setStatus("已连通，但 LLM 未返回有效回复", true);
-			this.setOutput((json ? JSON.stringify(json, null, 2) : text).slice(0, 1200));
+			this.setStatus("当前 LLM 配置测试成功");
+			this.setOutput(JSON.stringify({
+				endpoint,
+				model: llm.model,
+				results
+			}, null, 2));
 		}
 		catch (e) {
-			let msg = e?.name === "AbortError" ? "请求超时（30秒）" : (e.message || String(e));
+			let msg = e.message || String(e);
 			this.setStatus("LLM 测试失败：" + msg, true);
 			this.setOutput(msg);
-		}
-		finally {
-			clearTimeout(timeoutID);
 		}
 	},
 

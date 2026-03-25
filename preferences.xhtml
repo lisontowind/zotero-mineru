@@ -52,6 +52,13 @@
 				<html:option value="Español">Español</html:option>
 			</html:select>
 
+			<html:label for="mineru-summary-request-json">总结额外 JSON 参数</html:label>
+			<html:textarea
+				id="mineru-summary-request-json"
+				rows="4"
+				placeholder='{"enable_thinking": true}'
+			></html:textarea>
+
 			<html:label for="mineru-translate-language">翻译目标语言</html:label>
 			<html:select id="mineru-translate-language">
 				<html:option value="中文">中文</html:option>
@@ -71,11 +78,18 @@
 
 			<html:label for="mineru-translate-retry-count">翻译自动重试次数</html:label>
 			<html:input id="mineru-translate-retry-count" type="number" min="1" max="5" step="1" />
+
+			<html:label for="mineru-translate-request-json">翻译额外 JSON 参数</html:label>
+			<html:textarea
+				id="mineru-translate-request-json"
+				rows="4"
+				placeholder='{"enable_thinking": true}'
+			></html:textarea>
 		</html:div>
 		<html:div class="mineru-actions">
 			<html:button id="mineru-save-button" type="button">保存</html:button>
 			<html:button id="mineru-test-button" type="button">测试 MinerU 连接</html:button>
-			<html:button id="mineru-test-llm-button" type="button">测试 LLM 连接</html:button>
+			<html:button id="mineru-test-llm-button" type="button">测试当前 LLM 配置</html:button>
 			<html:span id="mineru-status"></html:span>
 		</html:div>
 		<html:pre id="mineru-test-output" class="mineru-test-output"></html:pre>
