@@ -76,12 +76,13 @@ bash build-xpi.sh
 
 ### 菜单注册（双轨制）
 
-- **Zotero 8 MenuManager**（主路径）：`Zotero.MenuManager.registerMenu()` 注册 `ROOT_MENU_ID`，父菜单下包含解析、总结、翻译三个子项
+- **Zotero 8 MenuManager**（主路径）：`Zotero.MenuManager.registerMenu()` 注册 `ROOT_MENU_ID`，父菜单下包含解析、Markdown 转笔记、总结、翻译四个子项
 - **XUL 回退**（旧版兼容）：`createXULElement("menu")` + `menupopup` + `popupshowing` 事件
 
-上下文菜单现在是一个父菜单 + 三个子菜单项：
+上下文菜单现在是一个父菜单 + 四个子菜单项：
 - `ROOT_MENU_ID`（"zotero-mineru-menu"）— 父菜单
 - `CONTEXT_MENU_ID`（"zotero-mineru-parse-pdf"）— PDF 解析
+- `MARKDOWN_NOTE_MENU_ID`（"zotero-mineru-markdown-to-note"）— 将 `#MinerU-Parse` Markdown 附件转为 Zotero 笔记
 - `SUMMARY_MENU_ID`（"zotero-mineru-ai-summary"）— AI 总结
 - `TRANSLATE_MENU_ID`（"zotero-mineru-ai-translate"）— AI 翻译
 
@@ -96,6 +97,7 @@ bash build-xpi.sh
 | apiBaseURL | string | `https://mineru.net/api/v4` | MinerU API 地址 |
 | apiToken | string | | API Token（自动去 `Bearer ` 前缀） |
 | modelVersion | string | `pipeline` | `pipeline` 或 `vlm` |
+| noteIncludeImages | bool | `false` | 将 Markdown 转为笔记时是否嵌入图片；默认关闭以减少 Zotero 卡顿 |
 | pollIntervalSec | int | 3 | 轮询间隔（秒） |
 | timeoutSec | int | 120 | 请求超时（秒） |
 | noteTitlePrefix | string | `MinerU Parse` | Markdown 文件名前缀（也用于旧版笔记标题） |
@@ -122,6 +124,7 @@ bash build-xpi.sh
 ### 防重复机制
 
 - **解析**：`collectPDFTasks()` 检查父条目子附件或子笔记是否含 `#MinerU-Parse` 标签（兼容新旧格式），有则跳过
+- **Markdown 转笔记**：`collectMarkdownToNoteTasks()` 检查是否存在 `#MinerU-Parse` Markdown 附件，且父条目还没有 `#MinerU-Parse` 笔记
 - **总结**：`collectSummaryTasks()` 检查是否含 `#MinerU-Summary` 笔记，有则跳过
 - **翻译**：`collectTranslateTasks()` 检查是否含 `#MinerU-Translation` 附件，有则跳过
 - 用户删除对应附件/笔记或标签即可重新触发
@@ -135,7 +138,7 @@ bash build-xpi.sh
 5. 下载 ZIP → 4 种下载策略回退（直连 / Bearer 认证 / HTTP→HTTPS / HTTPS+Bearer）
 6. 提取 Markdown → 解压 ZIP，`pickMarkdownEntry()` 选择 `.md` 文件（优先匹配原始文件名）
 7. 保存为 Markdown 附件 → `saveResultAsMarkdownAttachment()`：
-   - 通过 `rewriteImagePathsForStorage()` 将图片引用重写为 `images/<filename>` 相对路径
+   - 默认通过 `rewriteImagePathsForStorage()` 将图片引用重写为 `images/<filename>` 相对路径
    - 调用 `Zotero.Attachments.importFromFile()` 创建 stored file attachment
    - 在附件存储目录下创建 `images/` 子目录，写入所有图片文件
    - 给附件打 `#MinerU-Parse` tag，给父条目打 `#MinerU-Parsed` tag
@@ -151,6 +154,7 @@ Parent Item (论文条目)
 │           ├── fig1.png
 │           ├── fig2.png
 │           └── ...
+├── MinerU Parse xxx (笔记, tagged #MinerU-Parse)   # 可通过“Markdown 转笔记”菜单生成
 └── AI Summary (笔记, tagged #MinerU-Summary)
 └── Translation (中文) - xxx.md (stored attachment, tagged #MinerU-Translation)
 ```
@@ -217,6 +221,7 @@ Parent Item (论文条目)
 
 - 从 MinerU ZIP 结果中提取图片，支持 png/jpg/jpeg/gif/webp/bmp/svg/tif/tiff
 - 路径解析：`resolveArchiveReference()` 处理相对路径，大小写不敏感匹配
+- 对已有 Markdown 附件转笔记时，`buildParsedResultFromMarkdownAttachment()` 会按 `noteIncludeImages` 决定是否读取 storage 中的图片并复用嵌图逻辑
 - 两种嵌入策略：
   1. `Zotero.Attachments.importEmbeddedImage`（15s 超时）
   2. data URI base64 回退（`bytesToBase64` 分块转换）
@@ -230,6 +235,10 @@ preferences.xhtml 分两个区域：MinerU 设置 + LLM 设置，Grid 布局（1
 - **保存** — 保存所有偏好
 - **测试 MinerU 连接** — POST `/file-urls/batch` 验证 API 可用性
 - **测试 LLM 连接** — POST `/chat/completions` 验证 LLM 可用性（30s 超时）
+
+MinerU 解析相关设置项补充：
+- Markdown 附件默认带图保存，不受设置开关影响
+- **转化笔记时带图** — 控制“Markdown 转笔记”菜单生成的 Zotero 笔记是否嵌图，默认关闭
 
 翻译相关设置项补充：
 - **翻译分段字符数** — 控制单个 chunk 的最大字符数

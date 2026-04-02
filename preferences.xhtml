@@ -20,6 +20,9 @@
 				<html:option value="pipeline">pipeline</html:option>
 			</html:select>
 
+			<html:label for="mineru-note-include-images">转化笔记时带图</html:label>
+			<html:input id="mineru-note-include-images" type="checkbox" />
+
 			<html:label for="mineru-poll-interval-sec">轮询间隔(秒)</html:label>
 			<html:input id="mineru-poll-interval-sec" type="number" min="1" max="60" step="1" />
 
@@ -94,7 +97,7 @@
 		</html:div>
 		<html:pre id="mineru-test-output" class="mineru-test-output"></html:pre>
 		<html:p class="mineru-help">
-			调用官方 MinerU API 流程：申请上传地址、上传 PDF、轮询任务结果、下载完整结果 ZIP，并将 Markdown 写入新笔记。
+			调用官方 MinerU API 流程：申请上传地址、上传 PDF、轮询任务结果、下载完整结果 ZIP，并将 Markdown 保存为附件；如需 Zotero 笔记，可通过右键菜单转换。
 		</html:p>
 	</html:div>
 	<html:script src="preferences.js"></html:script>

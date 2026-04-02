@@ -9,6 +9,7 @@ ZoteroMineru = {
 	PREF_BRANCH: "extensions.zotero-mineru.",
 	ROOT_MENU_ID: "zotero-mineru-menu",
 	CONTEXT_MENU_ID: "zotero-mineru-parse-pdf",
+	MARKDOWN_NOTE_MENU_ID: "zotero-mineru-markdown-to-note",
 	SUMMARY_MENU_ID: "zotero-mineru-ai-summary",
 	TRANSLATE_MENU_ID: "zotero-mineru-ai-translate",
 	
@@ -44,6 +45,14 @@ ZoteroMineru = {
 				getTasks: (selectedItems) => this.collectPDFTasks(selectedItems),
 				run: ({ window, selectedItems }) => this.handleParseCommand({ window, selectedItems }),
 				errorPrefix: "执行失败"
+			},
+			{
+				id: this.MARKDOWN_NOTE_MENU_ID,
+				label: "将 MinerU Markdown 转为笔记",
+				l10nID: "zotero-mineru-menu-markdown-to-note",
+				getTasks: (selectedItems) => this.collectMarkdownToNoteTasks(selectedItems),
+				run: ({ window, selectedItems }) => this.handleMarkdownToNoteCommand({ window, selectedItems }),
+				errorPrefix: "转笔记失败"
 			},
 			{
 				id: this.SUMMARY_MENU_ID,
@@ -204,6 +213,7 @@ ZoteroMineru = {
 		let doc = window.document;
 		doc.getElementById(this.ROOT_MENU_ID)?.remove();
 		doc.getElementById(this.CONTEXT_MENU_ID)?.remove();
+		doc.getElementById(this.MARKDOWN_NOTE_MENU_ID)?.remove();
 		doc.getElementById(this.SUMMARY_MENU_ID)?.remove();
 		doc.getElementById(this.TRANSLATE_MENU_ID)?.remove();
 		let listenerData = this.popupListeners.get(window);
@@ -271,7 +281,8 @@ ZoteroMineru = {
 			modelVersion,
 			pollIntervalMS: pollIntervalSec * 1000,
 			timeoutMS: timeoutSec * 1000,
-			noteTitlePrefix: (Zotero.Prefs.get(this.PREF_BRANCH + "noteTitlePrefix", true) || "MinerU Parse").trim()
+			noteTitlePrefix: (Zotero.Prefs.get(this.PREF_BRANCH + "noteTitlePrefix", true) || "MinerU Parse").trim(),
+			noteIncludeImages: !!Zotero.Prefs.get(this.PREF_BRANCH + "noteIncludeImages", true)
 		};
 	},
 	
@@ -297,6 +308,28 @@ ZoteroMineru = {
 			if (tags.some((t) => t.tag === tagName)) return true
 		}
 		return false
+	},
+
+	isMineruParseMarkdownAttachment(item) {
+		if (!item?.isAttachment?.()) return false
+		let tags = item.getTags?.() || []
+		if (!tags.some((t) => t.tag === "#MinerU-Parse")) return false
+		let contentType = String(item.attachmentContentType || item.getField?.("contentType") || "").toLowerCase()
+		if (contentType === "text/markdown") return true
+		let title = String(item.getField?.("title") || "").trim()
+		return /\.(md|markdown)$/i.test(title)
+	},
+
+	findMineruParseMarkdownAttachment(parentItem) {
+		if (!parentItem?.isRegularItem?.()) return null
+		let attachmentIDs = parentItem.getAttachments()
+		for (let attachmentID of attachmentIDs) {
+			let attachmentItem = Zotero.Items.get(attachmentID)
+			if (this.isMineruParseMarkdownAttachment(attachmentItem)) {
+				return attachmentItem
+			}
+		}
+		return null
 	},
 
 	collectPDFTasks(selectedItems) {
@@ -327,6 +360,41 @@ ZoteroMineru = {
 		}
 
 		return tasks;
+	},
+
+	collectMarkdownToNoteTasks(selectedItems) {
+		let tasks = []
+		let seenAttachmentIDs = new Set()
+
+		let addTask = (sourceAttachment, parentItem) => {
+			if (!this.isMineruParseMarkdownAttachment(sourceAttachment)) return
+			if (seenAttachmentIDs.has(sourceAttachment.id)) return
+			if (parentItem && this.parentHasNoteWithTag(parentItem, "#MinerU-Parse")) return
+			seenAttachmentIDs.add(sourceAttachment.id)
+			tasks.push({ sourceAttachment, parentItem })
+		}
+
+		for (let item of selectedItems) {
+			if (this.isMineruParseMarkdownAttachment(item)) {
+				let parentItem = item.parentItemID ? Zotero.Items.get(item.parentItemID) : null
+				addTask(item, parentItem)
+				continue
+			}
+
+			let parentItem = null
+			if (item.isRegularItem()) {
+				parentItem = item
+			}
+			else if (item.isAttachment() || item.isNote()) {
+				let parentID = item.parentItemID
+				parentItem = parentID ? Zotero.Items.get(parentID) : null
+			}
+			if (!parentItem?.isRegularItem?.()) continue
+
+			addTask(this.findMineruParseMarkdownAttachment(parentItem), parentItem)
+		}
+
+		return tasks
 	},
 	
 	showAlert(window, title, message) {
@@ -757,7 +825,8 @@ ZoteroMineru = {
 		throw new Error(`MinerU 解析超时，最后状态: ${lastState || "unknown"}`);
 	},
 	
-	async extractNoteContentFromMineruZip(zipBytes, originalFileName) {
+	async extractNoteContentFromMineruZip(zipBytes, originalFileName, options = {}) {
+		let includeImages = options.includeImages !== false;
 		let tempDir = PathUtils.join(PathUtils.tempDir, `zotero-mineru-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 		let zipPath = PathUtils.join(tempDir, "result.zip");
 		
@@ -775,14 +844,20 @@ ZoteroMineru = {
 
 			let markdownBytes = await this.readZipEntryBytes(zipReader, tempDir, markdownEntryName);
 			let markdownText = new TextDecoder("utf-8").decode(markdownBytes);
-			let entryMap = this.buildArchiveEntryMap(zipReader);
-			let inlinedResult = await this.inlineArchiveImagesInMarkdown({
+			let inlinedResult = {
 				markdownText,
-				markdownEntryName: markdownEntryName,
-				zipReader,
-				tempDir,
-				entryMap
-			});
+				embeddedImages: []
+			};
+			if (includeImages) {
+				let entryMap = this.buildArchiveEntryMap(zipReader);
+				inlinedResult = await this.inlineArchiveImagesInMarkdown({
+					markdownText,
+					markdownEntryName: markdownEntryName,
+					zipReader,
+					tempDir,
+					entryMap
+				});
+			}
 			let rendered = await this.markdownToHTML(inlinedResult.markdownText);
 			return {
 				sourceKind: "markdown",
@@ -1792,6 +1867,12 @@ ZoteroMineru = {
 		return `${cleanPrefix} ${baseTitle}`;
 	},
 
+	normalizeMarkdownAttachmentTitle(attachment) {
+		let title = attachment?.getField?.("title") || "Markdown"
+		title = String(title || "").trim()
+		return title.replace(/\.(md|markdown)$/i, "")
+	},
+
 	stripHTMLToPlainText(html) {
 		return String(html || "")
 			.replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -1834,8 +1915,9 @@ ZoteroMineru = {
 		}
 	},
 
-	async saveResultAsNote({ attachment, parentItem, parsedResult, settings }) {
-		let attachmentTitle = attachment.getField("title")
+	async saveResultAsNote({ attachment, parentItem, parsedResult, settings, sourceTitle = null }) {
+		let attachmentTitle = sourceTitle
+			|| attachment.getField("title")
 			|| this.fileNameFromPath(attachment.getFilePath() || "PDF");
 		let noteTitle = this.buildPrefixedNoteTitle(
 			settings?.noteTitlePrefix,
@@ -1953,6 +2035,28 @@ ZoteroMineru = {
 		return { markdownText: result, imageFileMap }
 	},
 
+	removeLocalImageReferences(markdownText) {
+		let result = String(markdownText || "").replace(
+			/!\[([^\]]*)\]\(([^)]+)\)/g,
+			(match, _alt, rawTarget) => {
+				let targetInfo = this.parseMarkdownImageTarget(rawTarget)
+				let url = (targetInfo?.url || rawTarget || "").trim()
+				if (/^(https?:|\/\/|#|data:)/i.test(url)) return match
+				return ""
+			}
+		)
+
+		result = result.replace(
+			/<img\b([^>]*?)\bsrc=(["'])([^"']+)\2([^>]*)>/gi,
+			(match, _before, _quote, src) => {
+				if (/^(https?:|\/\/|#|data:)/i.test(src)) return match
+				return ""
+			}
+		)
+
+		return result.replace(/\n{3,}/g, "\n\n")
+	},
+
 	sanitizeFileName(name) {
 		return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/\s+/g, " ").trim()
 	},
@@ -2009,10 +2113,9 @@ ZoteroMineru = {
 		let embeddedImages = Array.isArray(parsedResult?.embeddedImages)
 			? parsedResult.embeddedImages
 			: []
-
-		// Rewrite image paths to images/<filename>
 		let rewritten = this.rewriteImagePathsForStorage(rawMarkdownText, embeddedImages)
 		let mdContent = rewritten.markdownText
+		let imageFileMap = rewritten.imageFileMap
 
 		// Write .md to temp dir
 		let tempDir = PathUtils.join(
@@ -2035,10 +2138,10 @@ ZoteroMineru = {
 
 			// Get storage directory and write images
 			let storagePath = PathUtils.parent(await mdAttachment.getFilePath())
-			if (embeddedImages.length) {
+			if (imageFileMap.size) {
 				let imagesDir = PathUtils.join(storagePath, "images")
 				await IOUtils.makeDirectory(imagesDir, { createAncestors: true })
-				for (let [baseName, image] of rewritten.imageFileMap) {
+				for (let [baseName, image] of imageFileMap) {
 					if (!image.bytes) continue
 					let imagePath = PathUtils.join(imagesDir, baseName)
 					await IOUtils.write(imagePath, image.bytes)
@@ -2053,7 +2156,7 @@ ZoteroMineru = {
 				await parentItem.saveTx()
 			}
 
-			this.log(`Markdown 附件已保存: ${mdFileName} (${embeddedImages.length} 张图片)`)
+			this.log(`Markdown 附件已保存: ${mdFileName} (${imageFileMap.size} 张图片)`)
 		}
 		finally {
 			// Clean up temp files
@@ -2103,6 +2206,128 @@ ZoteroMineru = {
 			importedCount,
 			fallbackCount
 		};
+	},
+
+	resolveStoredAttachmentImagePath(markdownPath, resourceURL) {
+		let normalizedRef = this.normalizeArchiveReference(resourceURL)
+		if (!normalizedRef || this.isExternalResourceURL(normalizedRef)) return ""
+		if (normalizedRef.startsWith("/")) return ""
+		let normalizedMarkdownPath = String(markdownPath || "").replace(/\\/g, "/")
+		let slashIndex = normalizedMarkdownPath.lastIndexOf("/")
+		if (slashIndex < 0) return ""
+		let merged = `${normalizedMarkdownPath.slice(0, slashIndex + 1)}${normalizedRef}`
+		let normalizedPath = this.normalizeArchivePath(merged)
+		if (/^[A-Za-z]:\//.test(normalizedPath) || normalizedPath.startsWith("//")) {
+			return normalizedPath.replace(/\//g, "\\")
+		}
+		return normalizedPath
+	},
+
+	async inlineStoredImagesInMarkdownAttachment({ markdownText, markdownPath }) {
+		let embeddedByPath = new Map()
+		let embeddedImages = []
+		let addEmbedded = (imagePath, mimeType, bytes) => {
+			let cacheKey = imagePath.toLowerCase()
+			if (embeddedByPath.has(cacheKey)) {
+				return embeddedByPath.get(cacheKey)
+			}
+			let id = `img-${embeddedImages.length + 1}`
+			let marker = `zotero-mineru-image://${id}`
+			let dataURI = `data:${mimeType};base64,${this.bytesToBase64(bytes)}`
+			let imageData = {
+				id,
+				marker,
+				entryName: imagePath,
+				fileName: this.fileNameFromPath(imagePath),
+				mimeType,
+				bytes,
+				dataURI
+			}
+			embeddedImages.push(imageData)
+			embeddedByPath.set(cacheKey, imageData)
+			return imageData
+		}
+		let resolveImage = async (resourceURL) => {
+			let imagePath = this.resolveStoredAttachmentImagePath(markdownPath, resourceURL)
+			if (!imagePath) return null
+			let cacheKey = imagePath.toLowerCase()
+			if (embeddedByPath.has(cacheKey)) {
+				return embeddedByPath.get(cacheKey)
+			}
+			let mimeType = this.guessMimeType(imagePath)
+			if (!mimeType.startsWith("image/")) return null
+			try {
+				let bytes = await IOUtils.read(imagePath)
+				return addEmbedded(imagePath, mimeType, bytes)
+			}
+			catch (_e) {
+				return null
+			}
+		}
+
+		let replacedText = await this.replaceAsync(
+			markdownText,
+			/!\[([^\]]*)\]\(([^)]+)\)/g,
+			async (match) => {
+				let alt = match[1] || ""
+				let targetInfo = this.parseMarkdownImageTarget(match[2] || "")
+				let imageData = await resolveImage(targetInfo.url)
+				if (!imageData) return match[0]
+				let titlePart = targetInfo.title ? ` "${targetInfo.title}"` : ""
+				return `![${alt}](${imageData.marker}${titlePart})`
+			}
+		)
+
+		replacedText = await this.replaceAsync(
+			replacedText,
+			/<img\b([^>]*?)\bsrc=(["'])([^"']+)\2([^>]*)>/gi,
+			async (match) => {
+				let before = match[1] || ""
+				let quote = match[2] || "\""
+				let src = match[3] || ""
+				let after = match[4] || ""
+				let imageData = await resolveImage(src)
+				if (!imageData) return match[0]
+				return `<img${before}src=${quote}${imageData.marker}${quote}${after}>`
+			}
+		)
+
+		return {
+			markdownText: replacedText,
+			embeddedImages
+		}
+	},
+
+	async buildParsedResultFromMarkdownAttachment(markdownAttachment, options = {}) {
+		let includeImages = options.includeImages === true
+		let markdownPath = await markdownAttachment.getFilePath()
+		if (!markdownPath) {
+			throw new Error("MinerU Markdown 附件文件不存在")
+		}
+		let fileBytes = await IOUtils.read(markdownPath)
+		let markdownText = new TextDecoder("utf-8").decode(fileBytes)
+		let sourceMarkdownText = includeImages
+			? markdownText
+			: this.removeLocalImageReferences(markdownText)
+		let inlinedResult = includeImages
+			? await this.inlineStoredImagesInMarkdownAttachment({
+				markdownText: sourceMarkdownText,
+				markdownPath
+			})
+			: {
+				markdownText: sourceMarkdownText,
+				embeddedImages: []
+			}
+		let rendered = await this.markdownToHTML(inlinedResult.markdownText)
+		return {
+			sourceKind: "markdown-attachment",
+			rawMarkdownText: markdownText,
+			rawMarkdownEntryName: this.fileNameFromPath(markdownPath),
+			markdownText: inlinedResult.markdownText,
+			contentHTML: rendered.html,
+			embeddedImageCount: inlinedResult.embeddedImages.length,
+			embeddedImages: inlinedResult.embeddedImages
+		}
 	},
 
 	async importEmbeddedImageForNote({ noteID, image }) {
@@ -2390,6 +2615,83 @@ ZoteroMineru = {
 			}
 		}
 		return tasks;
+	},
+
+	async handleMarkdownToNoteCommand({ window = null, selectedItems = null } = {}) {
+		let settings = this.getSettings()
+		let items = selectedItems
+			|| window?.ZoteroPane?.getSelectedItems?.()
+			|| []
+		let tasks = this.collectMarkdownToNoteTasks(items)
+		if (!tasks.length) {
+			this.showAlert(window, "MinerU", "当前选择里没有可转为笔记的 MinerU Markdown 附件。\n（已有 #MinerU-Parse 笔记的条目会被跳过）")
+			return
+		}
+		let shouldContinue = this.showConfirm(
+			window,
+			"MinerU Markdown 转笔记",
+			"提示：如果笔记过长，可能会导致同步失败。\n\n是否继续转化为笔记？"
+		)
+		if (!shouldContinue) {
+			return
+		}
+
+		let progress = new Zotero.ProgressWindow({ closeOnClick: true })
+		progress.changeHeadline("MinerU Markdown 转笔记")
+		progress.show()
+
+		let successes = 0
+		let failures = []
+
+		for (let task of tasks) {
+			let title = task.parentItem?.getField("title")
+				|| task.sourceAttachment.getField("title")
+				|| "未知文献"
+			let itemProgress = new progress.ItemProgress(
+				"chrome://zotero/skin/treeitem-note.png",
+				title
+			)
+			try {
+				if (typeof itemProgress.setText === "function") {
+					itemProgress.setText(`${title}（读取 Markdown）`)
+				}
+				let parsedResult = await this.buildParsedResultFromMarkdownAttachment(task.sourceAttachment, {
+					includeImages: settings.noteIncludeImages
+				})
+
+				if (typeof itemProgress.setText === "function") {
+					itemProgress.setText(`${title}（保存笔记）`)
+				}
+				await this.saveResultAsNote({
+					attachment: task.sourceAttachment,
+					parentItem: task.parentItem,
+					parsedResult,
+					settings,
+					sourceTitle: this.normalizeMarkdownAttachmentTitle(task.sourceAttachment)
+				})
+
+				if (typeof itemProgress.setText === "function") {
+					itemProgress.setText(`${title}（完成）`)
+				}
+				itemProgress.setProgress(100)
+				successes++
+			}
+			catch (e) {
+				if (typeof itemProgress.setText === "function") {
+					itemProgress.setText(`${title}（失败）`)
+				}
+				itemProgress.setError()
+				failures.push(`${title}: ${e.message || e}`)
+				Zotero.logError(e)
+			}
+		}
+
+		progress.addDescription(`完成 ${successes}/${tasks.length}`)
+		progress.startCloseTimer(5000)
+
+		if (failures.length) {
+			this.showAlert(window, "MinerU 转笔记部分失败", failures.slice(0, 10).join("\n"))
+		}
 	},
 
 	async handleSummaryCommand({ window = null, selectedItems = null } = {}) {

@@ -6,6 +6,7 @@ var ZoteroMineruPreferences = {
 		{ id: "mineru-api-base-url", pref: "apiBaseURL", type: "string" },
 		{ id: "mineru-api-token", pref: "apiToken", type: "string" },
 		{ id: "mineru-model-version", pref: "modelVersion", type: "string" },
+		{ id: "mineru-note-include-images", pref: "noteIncludeImages", type: "bool" },
 		{ id: "mineru-poll-interval-sec", pref: "pollIntervalSec", type: "int" },
 		{ id: "mineru-timeout-sec", pref: "timeoutSec", type: "int" },
 		{ id: "mineru-note-title-prefix", pref: "noteTitlePrefix", type: "string" },
@@ -77,7 +78,11 @@ var ZoteroMineruPreferences = {
 				value = Zotero.Prefs.get(this.PREF_BRANCH + "apiKey", true) || "";
 			}
 			if (value === undefined || value === null) value = "";
-			input.value = String(value);
+			if (field.type === "bool") {
+				input.checked = !!value;
+			} else {
+				input.value = String(value);
+			}
 		}
 		this.setStatus("");
 	},
@@ -86,7 +91,11 @@ var ZoteroMineruPreferences = {
 		for (let field of this.FIELDS) {
 			let input = this.$(field.id);
 			if (!input) continue;
-			let value = input.value;
+			let value = field.type === "bool" ? !!input.checked : input.value;
+			if (field.type === "bool") {
+				Zotero.Prefs.set(this.PREF_BRANCH + field.pref, value, true);
+				continue;
+			}
 			if (field.type === "int") {
 				let intValue = parseInt(value, 10);
 				if (!Number.isFinite(intValue) || intValue <= 0) {
