@@ -2104,8 +2104,7 @@ ZoteroMineru = {
 	},
 
 	async saveResultAsMarkdownAttachment({ attachment, parentItem, parsedResult, settings }) {
-		let attachmentTitle = attachment.getField("title")
-			|| this.fileNameFromPath(attachment.getFilePath() || "PDF")
+		let attachmentTitle = this.getItemFileStem(attachment, "PDF")
 		let prefix = settings?.noteTitlePrefix || "MinerU Parse"
 		let mdFileName = this.sanitizeFileName(`${prefix} - ${attachmentTitle}`) + ".md"
 
@@ -2481,6 +2480,18 @@ ZoteroMineru = {
 		let normalized = path.replace(/\\/g, "/");
 		let index = normalized.lastIndexOf("/");
 		return index >= 0 ? normalized.slice(index + 1) : normalized;
+	},
+
+	fileStemFromPath(path) {
+		let fileName = this.fileNameFromPath(path || "");
+		return String(fileName || "").replace(/\.[^.]+$/, "").trim();
+	},
+
+	getItemFileStem(item, fallback = "file") {
+		let stem = this.fileStemFromPath(item?.getFilePath?.() || "");
+		if (stem) return stem;
+		let title = String(item?.getField?.("title") || "").trim().replace(/\.[^.]+$/, "");
+		return title || fallback;
 	},
 	
 	escapeHTML(input) {
@@ -3279,8 +3290,7 @@ Rules:
 	},
 
 	async saveTranslationAsMarkdownAttachment({ parentItem, sourceAttachment, translatedText, language }) {
-		let sourceTitle = sourceAttachment.getField("title")
-			|| this.fileNameFromPath(sourceAttachment.getFilePath() || "document")
+		let sourceTitle = this.getItemFileStem(sourceAttachment, "document")
 		let mdFileName = this.sanitizeFileName(`Translation (${language}) - ${sourceTitle}`)
 		if (!mdFileName.endsWith(".md")) mdFileName += ".md"
 

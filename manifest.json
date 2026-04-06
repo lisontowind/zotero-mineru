@@ -1,7 +1,7 @@
 {
 	"manifest_version": 2,
 	"name": "Zotero MinerU Parser",
-	"version": "0.1.55",
+	"version": "0.1.56",
 	"description": "Parse PDF attachments with MinerU API and save results as Markdown",
 	"author": "lisontowind",
 	"homepage_url": "https://github.com/lisontowind/zotero-mineru",
