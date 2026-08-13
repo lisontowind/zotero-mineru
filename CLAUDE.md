@@ -231,6 +231,8 @@ Parent Item (论文条目)
 
 preferences.xhtml 分两个区域：MinerU 设置 + LLM 设置，Grid 布局（170px 标签列）。
 
+模型版本、总结语言和翻译目标语言使用带 `native="true"` 的 XUL `menulist`，并通过 `command` 事件保存。不要改回嵌入式 HTML `select`，否则在 Zotero 偏好面板中可能出现下拉菜单偶发无法弹出的问题。
+
 三个按钮：
 - **保存** — 保存所有偏好
 - **测试 MinerU 连接** — POST `/file-urls/batch` 验证 API 可用性

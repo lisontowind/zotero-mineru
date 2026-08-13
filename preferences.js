@@ -441,8 +441,14 @@ var ZoteroMineruPreferences = {
 			for (let field of this.FIELDS) {
 				let input = this.$(field.id);
 				if (!input) continue;
-				input.addEventListener("change", () => this.saveSettings({ silent: true }));
-				input.addEventListener("input", () => this.saveSettings({ silent: true }));
+				let saveSilently = () => this.saveSettings({ silent: true });
+				if (input.localName === "menulist") {
+					input.addEventListener("command", saveSilently);
+				}
+				else {
+					input.addEventListener("change", saveSilently);
+					input.addEventListener("input", saveSilently);
+				}
 			}
 			this.initialized = true;
 		}

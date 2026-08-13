@@ -17,7 +17,7 @@
 
 .mineru-grid input,
 .mineru-grid textarea,
-.mineru-grid select {
+.mineru-grid menulist {
 	width: 100%;
 	box-sizing: border-box;
 }
