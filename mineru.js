@@ -40,7 +40,7 @@ ZoteroMineru = {
 		return [
 			{
 				id: this.CONTEXT_MENU_ID,
-				label: "使用 MinerU 解析 PDF 并保存为 Markdown",
+				label: "使用 MinerU 解析 PDF 并保存为附件",
 				l10nID: "zotero-mineru-menu-parse-pdf",
 				getTasks: (selectedItems) => this.collectPDFTasks(selectedItems),
 				run: ({ window, selectedItems }) => this.handleParseCommand({ window, selectedItems }),
@@ -48,7 +48,7 @@ ZoteroMineru = {
 			},
 			{
 				id: this.MARKDOWN_NOTE_MENU_ID,
-				label: "将 MinerU Markdown 转为笔记",
+				label: "将 MinerU 解析附件转为笔记",
 				l10nID: "zotero-mineru-menu-markdown-to-note",
 				getTasks: (selectedItems) => this.collectMarkdownToNoteTasks(selectedItems),
 				run: ({ window, selectedItems }) => this.handleMarkdownToNoteCommand({ window, selectedItems }),
@@ -282,6 +282,7 @@ ZoteroMineru = {
 			pollIntervalMS: pollIntervalSec * 1000,
 			timeoutMS: timeoutSec * 1000,
 			noteTitlePrefix: (Zotero.Prefs.get(this.PREF_BRANCH + "noteTitlePrefix", true) || "MinerU Parse").trim(),
+			...this.getOutputSettings("parse"),
 			noteIncludeImages: !!Zotero.Prefs.get(this.PREF_BRANCH + "noteIncludeImages", true)
 		};
 	},
@@ -315,9 +316,9 @@ ZoteroMineru = {
 		let tags = item.getTags?.() || []
 		if (!tags.some((t) => t.tag === "#MinerU-Parse")) return false
 		let contentType = String(item.attachmentContentType || item.getField?.("contentType") || "").toLowerCase()
-		if (contentType === "text/markdown") return true
+		if (["text/markdown", "text/html"].includes(contentType)) return true
 		let title = String(item.getField?.("title") || "").trim()
-		return /\.(md|markdown)$/i.test(title)
+		return /\.(md|markdown|html?)$/i.test(title)
 	},
 
 	findMineruParseMarkdownAttachment(parentItem) {
@@ -473,7 +474,7 @@ ZoteroMineru = {
 					}
 				});
 				updateItemStatus({
-					text: "保存 Markdown",
+					text: "保存解析附件",
 					percent: 85
 				});
 					await this.saveResultAsMarkdownAttachment({
@@ -1359,6 +1360,17 @@ ZoteroMineru = {
 	},
 
 	parseDisplayMathBlock(lines, startIndex) {
+		if (/^\s*\\\[/.test(lines[startIndex] || "")) {
+			let normalizedLines = lines.slice();
+			normalizedLines[startIndex] = normalizedLines[startIndex].replace(/\\\[/, () => "$$");
+			for (let i = startIndex; i < normalizedLines.length; i++) {
+				if (normalizedLines[i].includes("\\]")) {
+					normalizedLines[i] = normalizedLines[i].replace(/\\\]/, () => "$$");
+					break;
+				}
+			}
+			return this.parseDisplayMathBlock(normalizedLines, startIndex);
+		}
 		let startLine = String(lines[startIndex] || "");
 		let trimmed = startLine.trim();
 		if (!trimmed.startsWith("$$")) return null;
@@ -1730,6 +1742,15 @@ ZoteroMineru = {
 		});
 		let mathTokens = [];
 		value = this.replaceInlineMathWithTokens(value, mathTokens);
+		value = this.normalizeEquationNumbers(value);
+		// Preserve only basic formatting tags; never carry source attributes into output.
+		let formattingTokens = [];
+		value = value.replace(/(?:\\?<|&lt;)(\/?)(sup|sub|br|b|i|strong|em|u|s)(?=[\s/>&\\])(?:\s+[^<>]*?)?\s*\/?(?:\\?>|&gt;)/gi, (_match, closing, name) => {
+			let token = `@@F${formattingTokens.length}@@`;
+			name = name.toLowerCase();
+			formattingTokens.push(name === "br" ? "<br>" : `<${closing}${name}>`);
+			return token;
+		});
 
 		let escaped = this.escapeHTML(value);
 		let imageTokens = [];
@@ -1760,11 +1781,17 @@ ZoteroMineru = {
 		escaped = escaped.replace(/@@I(\d+)@@/g, (_m, idx) => imageTokens[Number(idx)] || "");
 		escaped = escaped.replace(/@@M(\d+)@@/g, (_m, idx) => mathTokens[Number(idx)] || "");
 		escaped = escaped.replace(/@@C(\d+)@@/g, (_m, idx) => codeTokens[Number(idx)] || "");
+		escaped = escaped.replace(/@@F(\d+)@@/g, (_m, idx) => formattingTokens[Number(idx)] || "");
 		return escaped;
 	},
 
 	replaceInlineMathWithTokens(text, mathTokens) {
 		let value = String(text || "");
+		value = value.replace(/\\\(([\s\S]*?)\\\)/g, (_match, tex) => {
+			let token = `@@M${mathTokens.length}@@`;
+			mathTokens.push(`<span class="math">$${this.escapeHTML(tex)}$</span>`);
+			return token;
+		});
 		let output = "";
 		let i = 0;
 		while (i < value.length) {
@@ -2041,7 +2068,7 @@ ZoteroMineru = {
 			(match, _alt, rawTarget) => {
 				let targetInfo = this.parseMarkdownImageTarget(rawTarget)
 				let url = (targetInfo?.url || rawTarget || "").trim()
-				if (/^(https?:|\/\/|#|data:)/i.test(url)) return match
+				if (/^(https?:|\/\/|#)/i.test(url)) return match
 				return ""
 			}
 		)
@@ -2049,7 +2076,7 @@ ZoteroMineru = {
 		result = result.replace(
 			/<img\b([^>]*?)\bsrc=(["'])([^"']+)\2([^>]*)>/gi,
 			(match, _before, _quote, src) => {
-				if (/^(https?:|\/\/|#|data:)/i.test(src)) return match
+				if (/^(https?:|\/\/|#)/i.test(src)) return match
 				return ""
 			}
 		)
@@ -2104,63 +2131,16 @@ ZoteroMineru = {
 	},
 
 	async saveResultAsMarkdownAttachment({ attachment, parentItem, parsedResult, settings }) {
-		let attachmentTitle = this.getItemFileStem(attachment, "PDF")
-		let prefix = settings?.noteTitlePrefix || "MinerU Parse"
-		let mdFileName = this.sanitizeFileName(`${prefix} - ${attachmentTitle}`) + ".md"
-
-		let rawMarkdownText = parsedResult?.rawMarkdownText || ""
-		let embeddedImages = Array.isArray(parsedResult?.embeddedImages)
-			? parsedResult.embeddedImages
-			: []
-		let rewritten = this.rewriteImagePathsForStorage(rawMarkdownText, embeddedImages)
-		let mdContent = rewritten.markdownText
-		let imageFileMap = rewritten.imageFileMap
-
-		// Write .md to temp dir
-		let tempDir = PathUtils.join(
-			PathUtils.tempDir,
-			`zotero-mineru-md-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-		)
-		await IOUtils.makeDirectory(tempDir, { createAncestors: true })
-		let mdTempPath = PathUtils.join(tempDir, mdFileName)
-		await IOUtils.writeUTF8(mdTempPath, mdContent)
-
-		try {
-			// Create stored file attachment
-			let mdAttachment = await Zotero.Attachments.importFromFile({
-				file: mdTempPath,
-				libraryID: attachment.libraryID,
-				parentItemID: parentItem ? parentItem.id : undefined,
-				contentType: "text/markdown",
-				charset: "utf-8"
-			})
-
-			// Get storage directory and write images
-			let storagePath = PathUtils.parent(await mdAttachment.getFilePath())
-			if (imageFileMap.size) {
-				let imagesDir = PathUtils.join(storagePath, "images")
-				await IOUtils.makeDirectory(imagesDir, { createAncestors: true })
-				for (let [baseName, image] of imageFileMap) {
-					if (!image.bytes) continue
-					let imagePath = PathUtils.join(imagesDir, baseName)
-					await IOUtils.write(imagePath, image.bytes)
-				}
-			}
-
-			// Tag the attachment and parent
-			mdAttachment.addTag("#MinerU-Parse", 0)
-			await mdAttachment.saveTx()
-			if (parentItem) {
-				parentItem.addTag("#MinerU-Parsed", 0)
-				await parentItem.saveTx()
-			}
-
-			this.log(`Markdown 附件已保存: ${mdFileName} (${imageFileMap.size} 张图片)`)
-		}
-		finally {
-			// Clean up temp files
-			await IOUtils.remove(mdTempPath).catch(() => {})
-			await IOUtils.remove(tempDir, { recursive: true }).catch(() => {})
+		await this.saveDocumentAttachment({
+			libraryID: attachment.libraryID, parentItem,
+			title: `${settings.noteTitlePrefix || "MinerU Parse"} - ${this.getItemFileStem(attachment, "PDF")}`,
+			markdown: parsedResult.markdownText,
+			images: parsedResult.embeddedImages || [],
+			format: settings.outputFormat, imageMode: settings.imageMode, tag: "#MinerU-Parse", keepMarkdown: true
+		});
+		if (parentItem) {
+			parentItem.addTag("#MinerU-Parsed", 0);
+			await parentItem.saveTx();
 		}
 	},
 
@@ -2219,14 +2199,14 @@ ZoteroMineru = {
 		if (/^[A-Za-z]:\//.test(normalizedPath) || normalizedPath.startsWith("//")) {
 			return normalizedPath.replace(/\//g, "\\")
 		}
-		return normalizedPath
+		return normalizedMarkdownPath.startsWith("/") ? "/" + normalizedPath : normalizedPath
 	},
 
 	async inlineStoredImagesInMarkdownAttachment({ markdownText, markdownPath }) {
 		let embeddedByPath = new Map()
 		let embeddedImages = []
 		let addEmbedded = (imagePath, mimeType, bytes) => {
-			let cacheKey = imagePath.toLowerCase()
+			let cacheKey = imagePath.startsWith("data:") ? imagePath : imagePath.toLowerCase()
 			if (embeddedByPath.has(cacheKey)) {
 				return embeddedByPath.get(cacheKey)
 			}
@@ -2237,7 +2217,7 @@ ZoteroMineru = {
 				id,
 				marker,
 				entryName: imagePath,
-				fileName: this.fileNameFromPath(imagePath),
+				fileName: imagePath.startsWith("data:") ? `image-${embeddedImages.length + 1}.${this.guessImageExtension(mimeType)}` : this.fileNameFromPath(imagePath),
 				mimeType,
 				bytes,
 				dataURI
@@ -2247,6 +2227,12 @@ ZoteroMineru = {
 			return imageData
 		}
 		let resolveImage = async (resourceURL) => {
+			if (/^data:image\//i.test(resourceURL)) {
+				let match = resourceURL.match(/^data:(image\/[\w.+-]+);base64,([A-Za-z0-9+/=\s]+)$/i);
+				if (!match) throw new Error("不支持的内嵌图片格式");
+				let binary = atob(match[2].replace(/\s/g, ""));
+				return addEmbedded(resourceURL, match[1], Uint8Array.from(binary, ch => ch.charCodeAt(0)));
+			}
 			let imagePath = this.resolveStoredAttachmentImagePath(markdownPath, resourceURL)
 			if (!imagePath) return null
 			let cacheKey = imagePath.toLowerCase()
@@ -2259,13 +2245,19 @@ ZoteroMineru = {
 				let bytes = await IOUtils.read(imagePath)
 				return addEmbedded(imagePath, mimeType, bytes)
 			}
-			catch (_e) {
-				return null
+			catch (e) {
+				throw new Error(`图片读取失败：${imagePath} (${e.message || e})`)
 			}
 		}
 
-		let replacedText = await this.replaceAsync(
+		// Protect data URLs independently of Markdown/HTML image syntax.
+		let protectedText = await this.replaceAsync(
 			markdownText,
+			/data:image\/[\w.+-]+;base64,[A-Za-z0-9+/=]+/gi,
+			async (match) => (await resolveImage(match[0])).marker
+		);
+		let replacedText = await this.replaceAsync(
+			protectedText,
 			/!\[([^\]]*)\]\(([^)]+)\)/g,
 			async (match) => {
 				let alt = match[1] || ""
@@ -2301,10 +2293,10 @@ ZoteroMineru = {
 		let includeImages = options.includeImages === true
 		let markdownPath = await markdownAttachment.getFilePath()
 		if (!markdownPath) {
-			throw new Error("MinerU Markdown 附件文件不存在")
+			throw new Error("MinerU 解析附件文件不存在")
 		}
 		let fileBytes = await IOUtils.read(markdownPath)
-		let markdownText = new TextDecoder("utf-8").decode(fileBytes)
+		let markdownText = this.decodeDocumentMarkdown(new TextDecoder("utf-8").decode(fileBytes), markdownPath)
 		let sourceMarkdownText = includeImages
 			? markdownText
 			: this.removeLocalImageReferences(markdownText)
@@ -2408,22 +2400,15 @@ ZoteroMineru = {
 			.join("\n")
 	},
 
-	confirmRetryFailedChunks(window, { title, failures, retryRound, autoRetryCount }) {
-		if (!failures.length) return false
-		let summary = this.buildFailedChunkSummary(failures, 8)
-		let hiddenCount = Math.max(failures.length - 8, 0)
-		let message =
-			`${title}\n\n` +
-			`以下段落在自动重试 ${autoRetryCount} 次后仍然失败：\n` +
-			`${summary}`
-		if (hiddenCount) {
-			message += `\n… 另有 ${hiddenCount} 段失败`
-		}
-		message += `\n\n是否现在只重试这些失败段落？`
-		if (retryRound > 1) {
-			message += `\n这是第 ${retryRound} 轮人工确认重试。`
-		}
-		return this.showConfirm(window, "AI 翻译失败段重试", message)
+	confirmRetryFailedChunks(window, { title, failures, autoRetryCount, completed = 0, total = failures.length }) {
+		let prompt = Services.prompt;
+		let flags = prompt.BUTTON_POS_0 * prompt.BUTTON_TITLE_IS_STRING |
+			prompt.BUTTON_POS_1 * prompt.BUTTON_TITLE_IS_STRING;
+		if (completed) flags |= prompt.BUTTON_POS_2 * prompt.BUTTON_TITLE_IS_STRING;
+		let result = prompt.confirmEx(window || null, "AI 翻译部分失败",
+			`${title}\n已完成 ${completed}/${total} 段，失败 ${failures.length} 段（已自动重试 ${autoRetryCount} 次）。\n\n${this.buildFailedChunkSummary(failures, 8)}`,
+			flags, "重试失败段落", "放弃", completed ? "保存已完成译文" : null, null, {});
+		return result === 0 ? "retry" : result === 2 && completed ? "save" : "discard";
 	},
 
 	replaceImageMarkerWithAttachment(html, marker, attachmentKey, mimeType, fileName) {
@@ -2507,6 +2492,170 @@ ZoteroMineru = {
 		this.log(`Loaded v${this.version}`);
 	},
 
+
+	getOutputSettings(prefix) {
+		let read = name => Zotero.Prefs.get(this.PREF_BRANCH + prefix + name, true);
+		let outputFormat = (prefix === "parse" ? read("GenerateHTML") === true : read("OutputFormat") === "html") ? "html" : "md";
+		return {
+			outputFormat,
+			imageMode: prefix === "translate" ? (outputFormat === "html" ? "inline" : "folder") : (read("ImageMode") === "inline" ? "inline" : "folder"),
+			translationMode: outputFormat === "html" && read("Mode") === "bilingual" ? "bilingual" : "translation"
+		};
+	},
+
+	async readSourceMarkdown(attachment) {
+		let filePath = await attachment.getFilePath();
+		if (!filePath) throw new Error("MinerU 解析附件文件不存在");
+		if (/\.html?$/i.test(filePath)) filePath = filePath.replace(/\.html?$/i, ".md");
+		if (!/\.(md|markdown)$/i.test(filePath)) throw new Error("请选择 MinerU 解析 Markdown 或 HTML 附件");
+		let bytes;
+		try { bytes = await IOUtils.read(filePath); }
+		catch (e) { throw new Error(`无法读取原始 Markdown：${filePath}。请重新解析 PDF。`); }
+		let markdown = new TextDecoder("utf-8").decode(bytes);
+		this.log(`Source Markdown: ${filePath}; characters: ${markdown.length}`);
+		return { filePath, markdown };
+	},
+
+	decodeDocumentMarkdown(content, path = "") {
+		if (!/\.html?$/i.test(path)) return content;
+		let match = content.match(/<script type="application\/json" id="mineru-source">([\s\S]*?)<\/script>/);
+		if (!match) throw new Error("HTML 附件缺少 MinerU 源文本，请重新解析");
+		let source = JSON.parse(match[1]);
+		if (typeof source.markdown !== "string") throw new Error("HTML 源文本无效");
+		return source.markdown;
+	},
+
+	splitTranslationBlocks(text) {
+		// Blank lines delimit prose, but never break fenced code or display math.
+		let blocks = [], current = [], fence = null, math = false;
+		let flush = () => { if (current.join("\n").trim()) blocks.push(current.join("\n")); current = []; };
+		for (let line of text.replace(/\r\n?/g, "\n").split("\n")) {
+			let marker = line.match(/^\s*(\x60{3,}|~{3,})/);
+			if (marker && !math) {
+				if (!fence) fence = marker[1];
+				else if (marker[1][0] === fence[0] && marker[1].length >= fence.length) fence = null;
+				current.push(line);
+				continue;
+			}
+			if (!fence) {
+				let count = (line.match(/\$\$/g) || []).length;
+				if (count % 2) math = !math;
+				if (/^\s*\\\[\s*$/.test(line)) math = true;
+				if (/^\s*\\\]\s*$/.test(line)) math = false;
+			}
+			if (!line.trim() && !fence && !math) flush();
+			else current.push(line);
+		}
+		flush();
+		return blocks;
+	},
+
+	normalizeEquationNumbers(text) {
+		// Observed PDF/OCR corruption of parenthesized equation numbers only.
+		let label = String.raw`ð\s*(?:\\?<|&lt;)sup(?:\\?>|&gt;)\s*(\d+)\s*(?:\\?<|&lt;)/sup(?:\\?>|&gt;)\s*Þ`;
+		return String(text || "")
+			.replace(new RegExp(String.raw`\\tag\s*\{\s*` + label + String.raw`\s*\}`, "g"), (_match, number) => `\\tag{${number}}`)
+			.replace(new RegExp("^\\s*" + label + "\\s*$", "gm"), (_match, number) => `(${number})`);
+	},
+
+	renderDocumentBody(markdown) {
+		let imageTokens = [];
+		let token = (src, alt = "") => {
+			if (!/^(images\/|data:image\/|https?:\/\/)/i.test(src)) throw new Error("不支持的图片引用：" + src.slice(0, 100));
+			let key = "MINERUIMAGETOKEN" + imageTokens.length + "END";
+			imageTokens.push({ key, html: '<img src="' + this.escapeHTML(src) + '" alt="' + this.escapeHTML(alt) + '">' });
+			return key;
+		};
+		let source = markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, target) => token(this.parseMarkdownImageTarget(target).url, alt));
+		source = source.replace(/<img\b[^>]*\bsrc=(["'])([^"']+)\1[^>]*>/gi, (_m, _q, src) => token(src));
+		let html = this.convertMarkdownToBasicHTML(source);
+		for (let image of imageTokens) html = html.split(image.key).join(image.html);
+		return this.renderHTMLMath(html);
+	},
+
+	renderHTMLMath(html) {
+		return html.replace(/<(span|pre) class="math">([\s\S]*?)<\/\1>/g, (_match, tag, encoded) => {
+			if (!this.mathRenderer) {
+				let scope = {};
+				Services.scriptloader.loadSubScript(this.rootURI + "vendor/katex/katex.min.js", scope);
+				this.mathRenderer = scope.katex;
+			}
+			let displayMode = tag === "pre";
+			let tex = encoded.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+			tex = displayMode ? tex.slice(2, -2) : tex.slice(1, -1);
+			tex = this.normalizeEquationNumbers(tex);
+			let rendered = this.mathRenderer.renderToString(tex, { output: "mathml", displayMode, throwOnError: false, trust: false, maxExpand: 1000, maxSize: 20, strict: "ignore" });
+			return displayMode ? '<div style="overflow-x:auto;margin:1em 0;padding:0.3em 0">' + rendered + '</div>' : rendered;
+		});
+	},
+
+	async saveDocumentAttachment({ libraryID, parentItem, title, markdown, images = [], format = "md", imageMode = "folder", tag, pairs = null, keepMarkdown = false, notice = "" }) {
+		if (format === "md") imageMode = "folder";
+		let fileMap = new Map();
+		let replaceImages = (text, mode = imageMode) => {
+			let result = String(text || "");
+			for (let [index, image] of images.entries()) {
+				if (!image.bytes?.length) throw new Error("图片数据缺失：" + image.fileName);
+				let name = "image-" + (index + 1) + "." + this.guessImageExtension(image.mimeType, image.fileName);
+				let url = mode === "inline"
+					? "data:" + image.mimeType + ";base64," + this.bytesToBase64(image.bytes)
+					: "images/" + name;
+				let markerPattern = new RegExp(this.escapeRegExp(image.marker) + "(?![0-9])", "g");
+				if (markerPattern.test(result)) {
+					markerPattern.lastIndex = 0;
+					result = result.replace(markerPattern, () => url);
+					if (mode !== "inline") fileMap.set(name, image.bytes);
+				}
+			}
+			let validate = url => {
+				if (!/^(images\/image-\d+\.[a-z0-9]+|data:image\/|https?:\/\/)/i.test(url)) throw new Error("图片未能读取：" + url.slice(0, 120));
+				if (url.startsWith("images/") && !fileMap.has(url.slice(7))) throw new Error("图片数据缺失：" + url);
+			};
+			for (let match of result.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) validate(this.parseMarkdownImageTarget(match[1]).url);
+			for (let match of result.matchAll(/<img\b[^>]*\bsrc=(["'])([^"']+)\1/gi)) validate(match[2]);
+			return result;
+		};
+		let companionMarkdown = keepMarkdown && format === "html" ? replaceImages(markdown, "folder") : null;
+		let source = replaceImages(markdown);
+		let content = notice ? `> ${notice}\n\n${source}` : source;
+		if (format === "html") {
+			let body = pairs
+				? '<div class="bilingual"><div class="column-label">原文</div><div class="column-label">译文</div>' + pairs.map(pair =>
+					'<section data-block="' + this.escapeHTML(pair.id) + '" class="pair"><div>' + this.renderDocumentBody(replaceImages(pair.source)) +
+					'</div><div>' + this.renderDocumentBody(replaceImages(pair.translated)) + '</div></section>').join("") + '</div>'
+				: this.renderDocumentBody(source);
+			let metadata = JSON.stringify({ markdown: source }).replace(/</g, "\\u003c");
+			content = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
+				'<title>' + this.escapeHTML(title) + '</title><style>body{font:16px/1.7 system-ui,sans-serif;max-width:1200px;margin:32px auto;padding:0 24px;color:#222}img{max-width:100%;height:auto}table{border-collapse:collapse;display:block;overflow:auto}td,th{border:1px solid #bbb;padding:6px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f5f5;padding:12px}.bilingual,.pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}.pair{grid-column:1/-1;border-top:1px solid #ddd;padding:12px 0}.pair>div{min-width:0;overflow-wrap:anywhere}.column-label{font-weight:bold}</style></head><body>' +
+				(notice ? '<p role="status">' + this.escapeHTML(notice) + '</p>' : '') + body + '<script type="application/json" id="mineru-source">' + metadata + '</script></body></html>';
+		}
+		let tempDir = PathUtils.join(PathUtils.tempDir, "zotero-mineru-output-" + Date.now() + "-" + Math.random().toString(36).slice(2));
+		await IOUtils.makeDirectory(tempDir, { createAncestors: true });
+		let imported = null;
+		try {
+			let path = PathUtils.join(tempDir, this.sanitizeFileName(title) + (format === "html" ? ".html" : ".md"));
+			await IOUtils.writeUTF8(path, content);
+			imported = await Zotero.Attachments.importFromFile({ file: path, libraryID, parentItemID: parentItem?.id,
+				contentType: format === "html" ? "text/html" : "text/markdown", charset: "utf-8" });
+			if (companionMarkdown !== null) {
+				await IOUtils.writeUTF8(PathUtils.join(PathUtils.parent(await imported.getFilePath()), this.sanitizeFileName(title) + ".md"), companionMarkdown);
+			}
+			if (fileMap.size) {
+				let dir = PathUtils.join(PathUtils.parent(await imported.getFilePath()), "images");
+				await IOUtils.makeDirectory(dir, { createAncestors: true });
+				for (let [name, bytes] of fileMap) await IOUtils.write(PathUtils.join(dir, name), bytes);
+			}
+			imported.addTag(tag, 0);
+			await imported.saveTx();
+			return imported;
+		} catch (error) {
+			if (imported) await imported.eraseTx().catch(e => this.log("清理未完成附件失败：" + e));
+			throw error;
+		} finally {
+			await IOUtils.remove(tempDir, { recursive: true }).catch(() => {});
+		}
+	},
+
 	getLLMSettings() {
 		let apiBaseURL = (Zotero.Prefs.get(this.PREF_BRANCH + "llmApiBaseURL", true) || "").trim();
 		apiBaseURL = apiBaseURL.replace(/\/+$/, "");
@@ -2514,6 +2663,7 @@ ZoteroMineru = {
 		apiKey = apiKey.replace(/^Bearer\s+/i, "");
 		let model = (Zotero.Prefs.get(this.PREF_BRANCH + "llmModel", true) || "").trim();
 		let summaryLanguage = (Zotero.Prefs.get(this.PREF_BRANCH + "summaryLanguage", true) || "中文").trim();
+		let summaryPrompt = (Zotero.Prefs.get(this.PREF_BRANCH + "summaryPrompt", true) || "").trim();
 		let summaryRequestJSON = (Zotero.Prefs.get(this.PREF_BRANCH + "summaryRequestJSON", true) || "").trim();
 		let translateLanguage = (Zotero.Prefs.get(this.PREF_BRANCH + "translateLanguage", true) || "中文").trim();
 		let translateChunkSize = Zotero.Prefs.get(this.PREF_BRANCH + "translateChunkSize", true);
@@ -2529,7 +2679,9 @@ ZoteroMineru = {
 			apiBaseURL,
 			apiKey,
 			model,
+			...this.getOutputSettings("translate"),
 			summaryLanguage,
+			summaryPrompt,
 			summaryRequestJSON,
 			translateLanguage,
 			translateChunkSize,
@@ -2572,6 +2724,12 @@ ZoteroMineru = {
 	collectSummaryTasks(selectedItems) {
 		let tasks = [];
 		let seenParentIDs = new Set();
+		let selectedSources = new Map();
+		for (let item of selectedItems) {
+			if (item.isAttachment?.() && item.parentItemID && item.getTags?.().some(t => t.tag === "#MinerU-Parse")) {
+				if (!selectedSources.has(item.parentItemID)) selectedSources.set(item.parentItemID, item);
+			}
+		}
 		for (let item of selectedItems) {
 			let parentItem = null;
 			if (item.isNote()) {
@@ -2587,12 +2745,13 @@ ZoteroMineru = {
 			if (seenParentIDs.has(parentItem.id)) continue;
 			seenParentIDs.add(parentItem.id);
 
-			let mineruSource = null
-			let mineruSourceType = null
+			let mineruSource = selectedSources.get(parentItem.id) || null
+			let mineruSourceType = "attachment"
 
 			// Check attachments first (new format: .md file)
 			let attachmentIDs = parentItem.getAttachments()
 			for (let attachmentID of attachmentIDs) {
+				if (mineruSource) break
 				let attachmentItem = Zotero.Items.get(attachmentID)
 				if (!attachmentItem) continue
 				let tags = attachmentItem.getTags()
@@ -2603,20 +2762,6 @@ ZoteroMineru = {
 				}
 			}
 
-			// Fallback to notes (legacy format)
-			if (!mineruSource) {
-				let noteIDs = parentItem.getNotes()
-				for (let noteID of noteIDs) {
-					let noteItem = Zotero.Items.get(noteID)
-					if (!noteItem) continue
-					let tags = noteItem.getTags()
-					if (tags.some((t) => t.tag === "#MinerU-Parse")) {
-						mineruSource = noteItem
-						mineruSourceType = "note"
-						break
-					}
-				}
-			}
 
 			if (mineruSource) {
 				let hasSummary = this.parentHasNoteWithTag(parentItem, "#MinerU-Summary");
@@ -2635,12 +2780,12 @@ ZoteroMineru = {
 			|| []
 		let tasks = this.collectMarkdownToNoteTasks(items)
 		if (!tasks.length) {
-			this.showAlert(window, "MinerU", "当前选择里没有可转为笔记的 MinerU Markdown 附件。\n（已有 #MinerU-Parse 笔记的条目会被跳过）")
+			this.showAlert(window, "MinerU", "当前选择里没有可转为笔记的 MinerU 解析附件。\n（已有 #MinerU-Parse 笔记的条目会被跳过）")
 			return
 		}
 		let shouldContinue = this.showConfirm(
 			window,
-			"MinerU Markdown 转笔记",
+			"MinerU 解析附件转笔记",
 			"提示：如果笔记过长，可能会导致同步失败。\n\n是否继续转化为笔记？"
 		)
 		if (!shouldContinue) {
@@ -2648,7 +2793,7 @@ ZoteroMineru = {
 		}
 
 		let progress = new Zotero.ProgressWindow({ closeOnClick: true })
-		progress.changeHeadline("MinerU Markdown 转笔记")
+		progress.changeHeadline("MinerU 解析附件转笔记")
 		progress.show()
 
 		let successes = 0
@@ -2664,7 +2809,7 @@ ZoteroMineru = {
 			)
 			try {
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（读取 Markdown）`)
+					itemProgress.setText(`${title}（读取解析附件）`)
 				}
 				let parsedResult = await this.buildParsedResultFromMarkdownAttachment(task.sourceAttachment, {
 					includeImages: settings.noteIncludeImages
@@ -2747,16 +2892,8 @@ ZoteroMineru = {
 				if (typeof itemProgress.setText === "function") {
 					itemProgress.setText(`${title}（提取文本）`);
 				}
-				let plainText = ""
-				if (task.mineruSourceType === "attachment") {
-					let filePath = await task.mineruSource.getFilePath()
-					if (!filePath) throw new Error("MinerU Markdown 附件文件不存在")
-					let fileBytes = await IOUtils.read(filePath)
-					plainText = new TextDecoder("utf-8").decode(fileBytes)
-				} else {
-					let noteHTML = task.mineruSource.getNote() || ""
-					plainText = this.stripHTMLToPlainText(noteHTML)
-				}
+				let source = await this.readSourceMarkdown(task.mineruSource);
+				let plainText = this.removeLocalImageReferences(source.markdown);
 				if (plainText.length > 60000) {
 					plainText = plainText.slice(0, 60000);
 				}
@@ -2803,8 +2940,11 @@ ZoteroMineru = {
 	async callLLMForSummary(plainText, llmSettings, language) {
 		let url = `${llmSettings.apiBaseURL}/chat/completions`;
 		language = language || "中文";
-		let systemPrompt
-		if (language === "中文") {
+		let systemPrompt;
+		let customPrompt = (llmSettings.summaryPrompt || "").trim();
+		if (customPrompt) {
+			systemPrompt = customPrompt.replace(/\{\{language\}\}/g, () => language);
+		} else if (language === "中文") {
 			systemPrompt = `你是一位学术研究助手。请根据用户提供的论文内容，用中文撰写一份结构化的学术总结。总结应包含以下几个部分：
 
 ## 研究背景
@@ -2908,6 +3048,14 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 	collectTranslateTasks(selectedItems) {
 		let tasks = []
 		let seenParentIDs = new Set()
+		// An explicitly selected parse attachment takes priority over its parent selection.
+		let selectedSources = new Map()
+		for (let item of selectedItems) {
+			if (item.isAttachment?.() && item.parentItemID &&
+				item.getTags?.().some(t => t.tag === "#MinerU-Parse")) {
+				if (!selectedSources.has(item.parentItemID)) selectedSources.set(item.parentItemID, item)
+			}
+		}
 		for (let item of selectedItems) {
 			let parentItem = null
 			if (item.isNote()) {
@@ -2923,11 +3071,12 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 			if (seenParentIDs.has(parentItem.id)) continue
 			seenParentIDs.add(parentItem.id)
 
-			let mineruSource = null
+			let mineruSource = selectedSources.get(parentItem.id) || null
 
 			// Find #MinerU-Parse attachment (Markdown file)
 			let attachmentIDs = parentItem.getAttachments()
 			for (let attachmentID of attachmentIDs) {
+				if (mineruSource) break
 				let attachmentItem = Zotero.Items.get(attachmentID)
 				if (!attachmentItem) continue
 				let tags = attachmentItem.getTags()
@@ -2981,6 +3130,7 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 		progress.changeHeadline(`AI 文献翻译 → ${language}`)
 		progress.show()
 
+		let partialSaves = 0
 		let successes = 0
 		let failures = []
 
@@ -2994,20 +3144,23 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 				if (typeof itemProgress.setText === "function") {
 					itemProgress.setText(`${title}（提取文本）`)
 				}
-				let filePath = await task.mineruSource.getFilePath()
-				if (!filePath) throw new Error("MinerU Markdown 附件文件不存在")
-				let fileBytes = await IOUtils.read(filePath)
-				let fullText = new TextDecoder("utf-8").decode(fileBytes)
+				let { filePath, markdown: sourceMarkdown } = await this.readSourceMarkdown(task.mineruSource);
+				if (typeof itemProgress.setText === "function") itemProgress.setText(`${title}（读取 Markdown：${this.fileNameFromPath(filePath)}）`);
+				let sourceDocument = await this.inlineStoredImagesInMarkdownAttachment({ markdownText: sourceMarkdown, markdownPath: filePath })
+				let fullText = sourceDocument.markdownText
 				if (!fullText.trim()) {
 					throw new Error("MinerU 解析内容为空")
 				}
 
 				// Split into chunks for translation
+				let bilingual = llmSettings.outputFormat === "html" && llmSettings.translationMode === "bilingual"
+				// Output layout must not change request size or multiply translation calls.
 				let chunks = this.splitMarkdownIntoChunks(fullText, chunkSize)
-				let translatedParts = new Array(chunks.length)
+				let translatedParts = new Array(chunks.length).fill(null)
 				let activeConcurrency = Math.min(translateConcurrency, chunks.length)
 				let pendingChunkIndexes = chunks.map((_chunk, index) => index)
 				let retryRound = 0
+				let savePartial = false
 
 				while (pendingChunkIndexes.length) {
 					let batchLabel = retryRound ? `重试第 ${retryRound} 轮` : "翻译"
@@ -3042,13 +3195,16 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 						itemProgress.setText(`${title}（等待确认重试失败段落）`)
 					}
 					retryRound++
-					let shouldRetryFailures = this.confirmRetryFailedChunks(window, {
+					let failureAction = this.confirmRetryFailedChunks(window, {
 						title,
 						failures: batchResult.failures,
 						retryRound,
-						autoRetryCount: translateRetryCount
+						autoRetryCount: translateRetryCount,
+						completed: translatedParts.filter(part => typeof part === "string" && part.trim()).length,
+						total: chunks.length
 					})
-					if (!shouldRetryFailures) {
+					if (failureAction === "save") { savePartial = true; break }
+					if (failureAction !== "retry") {
 						throw new Error(this.buildFailedChunkSummary(batchResult.failures, 10) || "部分段落翻译失败")
 					}
 					pendingChunkIndexes = batchResult.failures.map((failure) => failure.chunkIndex)
@@ -3057,7 +3213,7 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 					}
 				}
 
-				if (translatedParts.some((part) => typeof part !== "string" || !part.trim())) {
+				if (!savePartial && translatedParts.some((part) => typeof part !== "string" || !part.trim())) {
 					let missingChunks = translatedParts
 						.map((part, index) => (typeof part === "string" && part.trim()) ? null : `第 ${index + 1}/${translatedParts.length} 段`)
 						.filter(Boolean)
@@ -3067,7 +3223,8 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 				if (typeof itemProgress.setText === "function") {
 					itemProgress.setText(`${title}（合成翻译结果）`)
 				}
-				let translatedText = translatedParts.join("\n\n")
+				let completed = translatedParts.filter(part => typeof part === "string" && part.trim()).length
+				let translatedText = chunks.map((source, i) => translatedParts[i] || `> 未翻译\n\n${source}`).join("\n\n")
 
 				if (typeof itemProgress.setText === "function") {
 					itemProgress.setText(`${title}（保存附件）`)
@@ -3076,14 +3233,18 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 					parentItem: task.parentItem,
 					sourceAttachment: task.mineruSource,
 					translatedText,
-					language
+					images: sourceDocument.embeddedImages,
+					settings: llmSettings,
+					pairs: bilingual ? chunks.map((source, i) => ({ id: `block-${i + 1}`, source, translated: translatedParts[i] || "**未翻译**" })) : null,
+					language,
+					partial: savePartial ? { completed, total: chunks.length } : null
 				})
 
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（完成）`)
+					itemProgress.setText(`${title}（${savePartial ? "已保存部分译文" : "完成"}）`)
 				}
 				itemProgress.setProgress(100)
-				successes++
+				if (savePartial) partialSaves++; else successes++
 			} catch (e) {
 				if (typeof itemProgress.setText === "function") {
 					itemProgress.setText(`${title}（${this.isTimeoutError(e) ? "超时" : "失败"}）`)
@@ -3094,7 +3255,7 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 			}
 		}
 
-		progress.addDescription(`完成 ${successes}/${tasks.length}`)
+		progress.addDescription(`完成 ${successes}/${tasks.length}，部分保存 ${partialSaves}/${tasks.length}`)
 		if (failures.length) {
 			progress.addDescription(`失败 ${failures.length}/${tasks.length}`)
 		}
@@ -3106,53 +3267,16 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 	},
 
 	splitMarkdownIntoChunks(text, chunkSize) {
-		if (text.length <= chunkSize) return [text]
-
-		let chunks = []
-		// Split by headings first (# or ##)
-		let sections = text.split(/(?=^#{1,2}\s)/m)
-
-		let currentChunk = ""
-		for (let section of sections) {
-			if (!section) continue
-			if (currentChunk.length + section.length <= chunkSize) {
-				currentChunk += section
-			} else {
-				if (currentChunk) chunks.push(currentChunk)
-				// If a single section exceeds chunkSize, split by paragraphs
-				if (section.length > chunkSize) {
-					let paragraphs = section.split(/\n\n+/)
-					currentChunk = ""
-					for (let para of paragraphs) {
-						if (currentChunk.length + para.length + 2 <= chunkSize) {
-							currentChunk += (currentChunk ? "\n\n" : "") + para
-						} else {
-							if (currentChunk) chunks.push(currentChunk)
-							// If a single paragraph still exceeds chunkSize, hard split by lines
-							if (para.length > chunkSize) {
-								let lines = para.split("\n")
-								currentChunk = ""
-								for (let line of lines) {
-									if (currentChunk.length + line.length + 1 <= chunkSize) {
-										currentChunk += (currentChunk ? "\n" : "") + line
-									} else {
-										if (currentChunk) chunks.push(currentChunk)
-										currentChunk = line
-									}
-								}
-							} else {
-								currentChunk = para
-							}
-						}
-					}
-				} else {
-					currentChunk = section
-				}
+		let chunks = [], current = "";
+		for (let block of this.splitTranslationBlocks(text)) {
+			if (current && current.length + block.length + 2 > chunkSize) {
+				chunks.push(current);
+				current = "";
 			}
+			current += (current ? "\n\n" : "") + block;
 		}
-		if (currentChunk) chunks.push(currentChunk)
-
-		return chunks
+		if (current) chunks.push(current);
+		return chunks;
 	},
 
 	async translateChunkWithRetry({ chunkText, chunkIndex, totalChunks, autoRetryCount, translateChunk }) {
@@ -3231,7 +3355,33 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 		return { successes, failures }
 	},
 
+	prepareTranslationText(text) {
+		// Keep complete image syntax locally, including reference definitions and legacy markers.
+		let pattern = /!\[[^\]]*\]\((?:[^()\n]|\([^()]*\))*\)|!\[[^\]]*\]\[[^\]]*\]|<img\b[^>]*>|^\s{0,3}\[[^\]]+\]:\s*(?:zotero-mineru-image:\/\/|data:image\/)[^\n]*|zotero-mineru-image:\/\/img-\d+/gim;
+		let parts = [], texts = [], cursor = 0;
+		let addText = value => {
+			if (!value.trim()) { parts.push({ literal: value }); return; }
+			let leading = value.match(/^\s*/)[0], trailing = value.match(/\s*$/)[0];
+			parts.push({ index: texts.length, leading, trailing });
+			texts.push(value.trim());
+		};
+		for (let match of text.matchAll(pattern)) {
+			addText(text.slice(cursor, match.index));
+			parts.push({ literal: match[0] });
+			cursor = match.index + match[0].length;
+		}
+		addText(text.slice(cursor));
+		return { parts, texts, hasImages: cursor > 0 };
+	},
+
 	async callLLMForTranslation(text, language, llmSettings, chunkIndex, totalChunks) {
+		let prepared = this.prepareTranslationText(text);
+		if (!prepared.texts.length) return text;
+		let batch = prepared.hasImages;
+		let requestText = batch ? JSON.stringify(prepared.texts) : text;
+		if (/data:[^\s<>]*;base64,|zotero-mineru-image:\/\//i.test(requestText)) {
+			throw new Error("图片未能隔离，已阻止发送翻译请求");
+		}
 		let url = `${llmSettings.apiBaseURL}/chat/completions`
 
 		let chunkHint = totalChunks > 1
@@ -3244,16 +3394,18 @@ Rules:
 - Preserve all Markdown formatting (headings, bold, italic, lists, code blocks, etc.)
 - Preserve all mathematical formulas ($...$ and $$...$$) without translation
 - Preserve all table structures
-- Preserve all image references and links
+- Preserve all links
 - Translate only the natural language text
 - Do not add explanations or notes
 - Output only the translated Markdown content${chunkHint}`
+
+		if (batch) systemPrompt += "\nThe input is a JSON array of Markdown text fragments. Translate each fragment independently. Return only a JSON array of translated Markdown strings in exactly the same order and count. Do not merge fragments or add image references.";
 
 		let payload = {
 			model: llmSettings.model,
 			messages: [
 				{ role: "system", content: systemPrompt },
-				{ role: "user", content: text }
+				{ role: "user", content: requestText }
 			],
 			temperature: 0.3
 		}
@@ -3283,44 +3435,29 @@ Rules:
 			if (!content || !content.trim()) {
 				throw new Error("LLM 返回内容为空")
 			}
-			return content.trim()
+			if (/data:[^\s<>]*;base64,|zotero-mineru-image:\/\//i.test(content)) throw new Error("翻译返回了图片数据或标识，正文不应包含图片");
+			if (!batch) return content.trim();
+			let translated;
+			try { translated = JSON.parse(content.trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i, "$1")); }
+			catch (e) { throw new Error("翻译文字分片返回格式无效，请重试"); }
+			if (!Array.isArray(translated) || translated.length !== prepared.texts.length ||
+				translated.some(value => typeof value !== "string" || !value.trim())) {
+				throw new Error("翻译文字分片数量或内容无效，请重试");
+			}
+			return prepared.parts.map(part => part.literal !== undefined ? part.literal :
+				part.leading + translated[part.index].trim() + part.trailing).join("");
 		}
 
 		return await this.withTimeout(doFetch, 180000, "LLM 翻译请求")
 	},
 
-	async saveTranslationAsMarkdownAttachment({ parentItem, sourceAttachment, translatedText, language }) {
-		let sourceTitle = this.getItemFileStem(sourceAttachment, "document")
-		let mdFileName = this.sanitizeFileName(`Translation (${language}) - ${sourceTitle}`)
-		if (!mdFileName.endsWith(".md")) mdFileName += ".md"
-
-		// Write .md to temp dir
-		let tempDir = PathUtils.join(
-			PathUtils.tempDir,
-			`zotero-mineru-translate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-		)
-		await IOUtils.makeDirectory(tempDir, { createAncestors: true })
-		let mdTempPath = PathUtils.join(tempDir, mdFileName)
-		let rewrittenText = this.rewriteTranslationImageLinksToSourceStorage(translatedText, sourceAttachment)
-		await IOUtils.writeUTF8(mdTempPath, rewrittenText)
-
-		try {
-			let mdAttachment = await Zotero.Attachments.importFromFile({
-				file: mdTempPath,
-				libraryID: parentItem.libraryID,
-				parentItemID: parentItem.id,
-				contentType: "text/markdown",
-				charset: "utf-8"
-			})
-
-			mdAttachment.addTag("#MinerU-Translation", 0)
-			await mdAttachment.saveTx()
-
-			this.log(`翻译附件已保存: ${mdFileName} (图片链接已指向源附件 ${sourceAttachment?.key || "unknown"})`)
-		}
-		finally {
-			await IOUtils.remove(mdTempPath).catch(() => {})
-			await IOUtils.remove(tempDir, { recursive: true }).catch(() => {})
-		}
+	async saveTranslationAsMarkdownAttachment({ parentItem, sourceAttachment, translatedText, language, images, settings, pairs, partial = null }) {
+		await this.saveDocumentAttachment({
+			libraryID: parentItem.libraryID, parentItem,
+			title: `${partial ? `[未完成 ${partial.completed}/${partial.total}] ` : ""}Translation (${language}) - ${this.getItemFileStem(sourceAttachment, "document")}`,
+			markdown: translatedText, images, pairs,
+			format: settings.outputFormat, imageMode: settings.outputFormat === "html" ? "inline" : "folder", tag: partial ? "#MinerU-Translation-Partial" : "#MinerU-Translation",
+			notice: partial ? `未完成：已翻译 ${partial.completed}/${partial.total} 段；标注“未翻译”的位置保留原文。` : ""
+		});
 	}
 };

@@ -3,6 +3,10 @@ var ZoteroMineruPreferences = {
 	initialized: false,
 
 	FIELDS: [
+		{ id: "mineru-parseGenerateHTML", pref: "parseGenerateHTML", type: "bool" },
+		{ id: "mineru-parseImageMode", pref: "parseImageMode", type: "string" },
+		{ id: "mineru-translateOutputFormat", pref: "translateOutputFormat", type: "string" },
+		{ id: "mineru-translateMode", pref: "translateMode", type: "string" },
 		{ id: "mineru-api-base-url", pref: "apiBaseURL", type: "string" },
 		{ id: "mineru-api-token", pref: "apiToken", type: "string" },
 		{ id: "mineru-model-version", pref: "modelVersion", type: "string" },
@@ -14,6 +18,7 @@ var ZoteroMineruPreferences = {
 		{ id: "mineru-llm-api-key", pref: "llmApiKey", type: "string" },
 		{ id: "mineru-llm-model", pref: "llmModel", type: "string" },
 		{ id: "mineru-summary-language", pref: "summaryLanguage", type: "string" },
+		{ id: "mineru-summary-prompt", pref: "summaryPrompt", type: "string" },
 		{ id: "mineru-summary-request-json", pref: "summaryRequestJSON", type: "string" },
 		{ id: "mineru-translate-language", pref: "translateLanguage", type: "string" },
 		{ id: "mineru-translate-chunk-size", pref: "translateChunkSize", type: "int" },
@@ -84,10 +89,12 @@ var ZoteroMineruPreferences = {
 				input.value = String(value);
 			}
 		}
+		this.syncTranslationMode();
 		this.setStatus("");
 	},
 
 	saveSettings({ silent = false } = {}) {
+		this.syncTranslationMode();
 		for (let field of this.FIELDS) {
 			let input = this.$(field.id);
 			if (!input) continue;
@@ -130,6 +137,18 @@ var ZoteroMineruPreferences = {
 			this.setStatus("已保存");
 		}
 		return true;
+	},
+
+	syncTranslationMode() {
+		let format = this.$("mineru-translateOutputFormat");
+		let mode = this.$("mineru-translateMode");
+		let bilingual = this.$("mineru-bilingual-option");
+		if (!format || !mode) return;
+		let enabled = format.value === "html";
+		if (bilingual) bilingual.disabled = !enabled;
+		mode.disabled = !enabled;
+		let images = this.$("mineru-parseImageMode");
+		if (images) images.disabled = !this.$("mineru-parseGenerateHTML")?.checked;
 	},
 
 	readCurrentSettings() {

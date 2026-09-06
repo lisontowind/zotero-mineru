@@ -22,6 +22,19 @@
 				</menupopup>
 			</menulist>
 
+			<html:label for="mineru-parseGenerateHTML">同时生成 HTML（始终保留 Markdown）</html:label>
+			<html:div>
+				<html:input id="mineru-parseGenerateHTML" type="checkbox" aria-describedby="mineru-parse-markdown-help" />
+				<html:p id="mineru-parse-markdown-help" class="mineru-help">原始解析 Markdown 始终保存在附件目录中。未勾选时，Markdown 直接显示为 Zotero 附件；勾选 HTML 后，显示的是 HTML 主附件，请右键该附件并打开所在文件夹，查看同目录中的 .md 文件。AI 总结和翻译始终读取原始 Markdown。</html:p>
+			</html:div>
+
+			<html:label for="mineru-parseImageMode">HTML 图片保存方式</html:label>
+			<menulist id="mineru-parseImageMode" native="true"><menupopup>
+				<menuitem label="独立 images 文件夹" value="folder" />
+				<menuitem label="Base64 内嵌（单文件）" value="inline" />
+			</menupopup></menulist>
+
+
 			<html:label for="mineru-note-include-images">转化笔记时带图</html:label>
 			<html:input id="mineru-note-include-images" type="checkbox" />
 
@@ -59,12 +72,31 @@
 				</menupopup>
 			</menulist>
 
+			<html:label for="mineru-summary-prompt">AI 总结 Prompt</html:label>
+			<html:div>
+				<html:textarea id="mineru-summary-prompt" rows="8" aria-describedby="mineru-summary-prompt-help" placeholder="例如：请用 {{language}} 总结论文的研究问题、核心方法、创新点和局限性。"></html:textarea>
+				<html:p id="mineru-summary-prompt-help" class="mineru-help">留空使用默认总结提示词；填写后替换默认系统提示词。{{language}} 会替换为所选总结语言，论文正文会自动附加，无需粘贴。清空并保存可恢复默认。</html:p>
+			</html:div>
+
 			<html:label for="mineru-summary-request-json">总结额外 JSON 参数</html:label>
 			<html:textarea
 				id="mineru-summary-request-json"
 				rows="4"
 				placeholder='{"enable_thinking": true}'
 			></html:textarea>
+
+			<html:label for="mineru-translateOutputFormat">翻译保存格式</html:label>
+			<menulist id="mineru-translateOutputFormat" native="true"><menupopup>
+				<menuitem label="Markdown" value="md" />
+				<menuitem label="单文件 HTML" value="html" />
+			</menupopup></menulist>
+
+			<html:label for="mineru-translateMode">翻译模式</html:label>
+			<menulist id="mineru-translateMode" native="true"><menupopup>
+				<menuitem label="仅译文" value="translation" />
+				<menuitem id="mineru-bilingual-option" label="原文译文双栏对照（仅 HTML）" value="bilingual" />
+			</menupopup></menulist>
+
 
 			<html:label for="mineru-translate-language">翻译目标语言</html:label>
 			<menulist id="mineru-translate-language" native="true">
@@ -103,7 +135,7 @@
 		</html:div>
 		<html:pre id="mineru-test-output" class="mineru-test-output"></html:pre>
 		<html:p class="mineru-help">
-			调用官方 MinerU API 流程：申请上传地址、上传 PDF、轮询任务结果、下载完整结果 ZIP，并将 Markdown 保存为附件；如需 Zotero 笔记，可通过右键菜单转换。
+			解析和翻译可分别选择 Markdown / HTML 与图片保存方式。双栏对照仅支持 HTML；切换为 Markdown 会恢复仅译文。Markdown 内嵌图片的显示效果取决于阅读器。分离图片位于附件的 images 文件夹；已有附件不自动转换。
 		</html:p>
 	</html:div>
 	<html:script src="preferences.js"></html:script>

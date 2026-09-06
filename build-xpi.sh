@@ -26,6 +26,7 @@ FILES=(
   icon.svg
   icon16.svg
   locale
+  vendor
 )
 
 rm -f "$OUT_FILE"
