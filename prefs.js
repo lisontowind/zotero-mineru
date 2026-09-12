@@ -11,6 +11,7 @@ pref("extensions.zotero-mineru.llmModel", "");
 pref("extensions.zotero-mineru.summaryLanguage", "中文");
 pref("extensions.zotero-mineru.summaryPrompt", "");
 pref("extensions.zotero-mineru.parseGenerateHTML", false);
+pref("extensions.zotero-mineru.parseLinkSourcePDF", true);
 pref("extensions.zotero-mineru.parseImageMode", "folder");
 pref("extensions.zotero-mineru.translateOutputFormat", "md");
 pref("extensions.zotero-mineru.translateMode", "translation");

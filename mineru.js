@@ -283,6 +283,7 @@ ZoteroMineru = {
 			timeoutMS: timeoutSec * 1000,
 			noteTitlePrefix: (Zotero.Prefs.get(this.PREF_BRANCH + "noteTitlePrefix", true) || "MinerU Parse").trim(),
 			...this.getOutputSettings("parse"),
+			parseLinkSourcePDF: Zotero.Prefs.get(this.PREF_BRANCH + "parseLinkSourcePDF", true) !== false,
 			noteIncludeImages: !!Zotero.Prefs.get(this.PREF_BRANCH + "noteIncludeImages", true)
 		};
 	},
@@ -444,6 +445,7 @@ ZoteroMineru = {
 		
 		let successes = 0;
 		let failures = [];
+		let warnings = [];
 		
 		for (let task of tasks) {
 			let title = task.attachment.getField("title") || this.fileNameFromPath(task.attachment.getFilePath() || "");
@@ -477,14 +479,15 @@ ZoteroMineru = {
 					text: "保存解析附件",
 					percent: 85
 				});
-					await this.saveResultAsMarkdownAttachment({
+					let savedResult = await this.saveResultAsMarkdownAttachment({
 						attachment: task.attachment,
 						parentItem: task.parentItem,
 						parsedResult,
 						settings
 					});
+				if (savedResult?.warning) warnings.push(`${title}: ${savedResult.warning}`);
 				updateItemStatus({
-					text: "完成",
+					text: savedResult?.warning || "完成",
 					percent: 100
 				});
 				successes++;
@@ -500,6 +503,9 @@ ZoteroMineru = {
 		progress.addDescription(`完成 ${successes}/${tasks.length}`);
 		progress.startCloseTimer(5000);
 		
+		if (warnings.length) {
+			this.showAlert(window, "MinerU 关联提醒", warnings.join("\n"));
+		}
 		if (failures.length) {
 			this.showAlert(window, "MinerU 部分失败", failures.slice(0, 10).join("\n"));
 		}
@@ -2131,7 +2137,7 @@ ZoteroMineru = {
 	},
 
 	async saveResultAsMarkdownAttachment({ attachment, parentItem, parsedResult, settings }) {
-		await this.saveDocumentAttachment({
+		let imported = await this.saveDocumentAttachment({
 			libraryID: attachment.libraryID, parentItem,
 			title: `${settings.noteTitlePrefix || "MinerU Parse"} - ${this.getItemFileStem(attachment, "PDF")}`,
 			markdown: parsedResult.markdownText,
@@ -2141,6 +2147,32 @@ ZoteroMineru = {
 		if (parentItem) {
 			parentItem.addTag("#MinerU-Parsed", 0);
 			await parentItem.saveTx();
+		}
+		let warning = null;
+		if (settings.parseLinkSourcePDF !== false) {
+			try {
+				await this.linkParseSource(attachment, imported);
+			} catch (error) {
+				Zotero.logError(error);
+				warning = "解析附件已保存，但关联失败";
+			}
+		}
+		return { attachment: imported, warning };
+	},
+
+	async linkParseSource(source, parsed) {
+		try {
+			await Zotero.DB.executeTransaction(async () => {
+				if (source.addRelatedItem(parsed)) await source.save();
+				if (parsed.addRelatedItem(source)) await parsed.save();
+			});
+		} catch (error) {
+			// Discard in-memory relation changes after the database rollback as well.
+			for (let item of [source, parsed]) {
+				try { await item.reload(["relations"], true); }
+				catch (reloadError) { Zotero.logError(reloadError); }
+			}
+			throw error;
 		}
 	},
 

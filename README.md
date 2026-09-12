@@ -99,3 +99,7 @@ zotero-mineru-<version>.xpi
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+### Source PDF relationships
+
+Parsing creates bidirectional Related Item links between each source PDF and its generated Markdown or HTML main attachment by default, including after upgrades. Disable this in parsing settings to stop new links. Existing links remain; historical results are not matched. Renaming and reparenting within the same library preserve links. Summaries, translations and converted notes are excluded; cross-library copies and deleted/recreated items are not covered.

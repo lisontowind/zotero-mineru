@@ -3,6 +3,7 @@ var ZoteroMineruPreferences = {
 	initialized: false,
 
 	FIELDS: [
+		{ id: "mineru-parseLinkSourcePDF", pref: "parseLinkSourcePDF", type: "bool", defaultValue: true },
 		{ id: "mineru-parseGenerateHTML", pref: "parseGenerateHTML", type: "bool" },
 		{ id: "mineru-parseImageMode", pref: "parseImageMode", type: "string" },
 		{ id: "mineru-translateOutputFormat", pref: "translateOutputFormat", type: "string" },
@@ -82,7 +83,7 @@ var ZoteroMineruPreferences = {
 			if (field.pref === "apiToken" && (!value || !String(value).trim())) {
 				value = Zotero.Prefs.get(this.PREF_BRANCH + "apiKey", true) || "";
 			}
-			if (value === undefined || value === null) value = "";
+			if (value === undefined || value === null) value = field.defaultValue ?? "";
 			if (field.type === "bool") {
 				input.checked = !!value;
 			} else {
