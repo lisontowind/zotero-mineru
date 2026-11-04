@@ -1,6 +1,6 @@
 # Zotero MinerU Plugin
 
-Zotero 8/9/10 插件，调用 MinerU 官方 API 解析 PDF，始终保存原始 Markdown，并支持可选 HTML、Markdown 转笔记、LLM 总结和翻译。本文描述 v0.1.70 的实现；版本号以 manifest.json 为准。
+Zotero 8/9/10 插件，调用 MinerU 官方 API 解析 PDF，始终保存原始 Markdown，并支持可选 HTML、Markdown 转笔记、LLM 总结和翻译。本文描述 v0.1.71 的实现；版本号以 manifest.json 为准。
 
 ## 项目结构
 
@@ -23,6 +23,13 @@ locale/
 icon.svg / icon16.svg       # 插件图标
 vendor/katex/              # KaTeX 0.16.22、MIT 许可证和来源说明
 tests/output-formats.test.cjs # Node VM 回归测试，模拟 Zotero / IOUtils / LLM
+tests/network-reliability.test.cjs # 下载认证、网络中止、退避重试和全文总结回归测试
+tests/document-safety.test.cjs # 链接协议、图片路径边界和解析器失败回退
+tests/settings-safety.test.cjs # 设置先校验后写入、范围与保留字段校验
+tests/task-locks.test.cjs # 跨窗口任务互斥、批次预留及异常后释放
+
+tests/result-tags.test.cjs # 结果保存后同步标记父文献条目，保留子条目标签
+tests/html-safety.browser.html # 使用浏览器原生 DOM 验证 HTML 表格过滤和公式
 ```
 
 ## 构建
@@ -105,7 +112,7 @@ Windows 缺少 Bash / bsdtar 时，可用 Python `zipfile` 按 `build-xpi.sh` �
 | modelVersion | string | `pipeline` | `pipeline` 或 `vlm` |
 | noteIncludeImages | bool | `false` | 将 Markdown 转为笔记时是否嵌入图片；默认关闭以减少 Zotero 卡顿 |
 | pollIntervalSec | int | 3 | 轮询间隔（秒） |
-| timeoutSec | int | 120 | 请求超时（秒） |
+| timeoutSec | int | 120 | MinerU 单次请求（含正文读取）超时及解析轮询总时限（秒） |
 | noteTitlePrefix | string | `MinerU Parse` | Markdown 文件名前缀（也用于旧版笔记标题） |
 | llmApiBaseURL | string | | LLM API 地址 |
 | llmApiKey | string | | LLM API Key（自动去 `Bearer ` 前缀） |
@@ -129,11 +136,13 @@ Windows 缺少 Bash / bsdtar 时，可用 Python `zipfile` 按 `build-xpi.sh` �
 
 | 标签 | 附加对象 | 用途 |
 |------|---------|------|
-| `#MinerU-Parse` | Markdown / HTML 主附件 | 标识解析结果；旧解析笔记也可能具有此标签 |
+| `#MinerU-Parse` | 父文献条目及 Markdown / HTML 主附件、解析笔记 | 标识解析结果；子条目标签继续用于结果识别 |
 | `#MinerU-Parsed` | 父条目 | 标识已完成解析的文献条目 |
-| `#MinerU-Summary` | 笔记 | 标识由 AI 总结生成的笔记 |
-| `#MinerU-Translation` | Markdown / HTML 附件 | 完整翻译结果 |
-| `#MinerU-Translation-Partial` | Markdown / HTML 附件 | 部分译文，不阻止重新翻译 |
+| `#MinerU-Summary` | 父文献条目及笔记 | 标识由 AI 总结生成的笔记 |
+| `#MinerU-Translation` | 父文献条目及 Markdown / HTML 附件 | 完整翻译结果 |
+| `#MinerU-Translation-Partial` | 父文献条目及 Markdown / HTML 附件 | 部分译文，不阻止重新翻译 |
+
+`tagResultParent()` 在解析附件、解析笔记、总结笔记、翻译附件保存成功后统一添加对应父条目标签；解析还保留 `#MinerU-Parsed`。保留现有用户标签，无父条目的独立解析结果仍只标记自身。已有结果不自动补标，父条目标签仅用于检索，不参与防重复判断，也不随子条目删除而自动清除。
 
 ### 防重复机制
 
@@ -144,19 +153,27 @@ Windows 缺少 Bash / bsdtar 时，可用 Python `zipfile` 按 `build-xpi.sh` �
 - 用户删除对应附件/笔记或标签即可重新触发
 - 总结和翻译优先使用明确选中的解析附件，即使父条目也被选中；每个父条目仅创建一个任务。没有明确选择时采用父条目下第一个带解析标签的附件。
 
+### 运行中任务保护
+
+- 四个 `handle*Command` 在收集任务后统一经过 `runTaskBatch()`，实际执行分别交给 `runParseTasks()`、`runMarkdownToNoteTasks()`、`runSummaryTasks()`、`runTranslateTasks()`；菜单及其他入口应始终调用 `handle*Command`。
+- `activeTaskKeys` 在插件单例中跨 Zotero 窗口共享。Key 为操作类型 + Zotero 条目 ID：解析以源 PDF 为单位，总结/翻译以父条目为单位；转笔记有父条目时按父条目、独立附件按附件去重。
+- 首次异步操作或转笔记确认弹窗前，同步预留整个批次，含尚未开始的条目；预留持续到整个批次退出。重复选择也在批次内去重，同父条目的不同 PDF 仍可分别解析。
+- 重复触发时只执行未被占用的条目，在进度中报告跳过数量；全部被占用时提示等待。MenuManager 和 XUL 菜单共用过滤后的任务列表，重新展开时不启用仅含占用条目的同类操作。不同条目及不同操作可并行。
+- `finally` 统一释放本批次预留，涵盖处理/保存失败、进度窗口异常、取消转笔记。运行中保护仅在当前插件实例内生效，不提供任务取消或跨重启恢复。
+
 ## PDF 解析流程
 
 1. 读取本地 PDF → `IOUtils.read()`
 2. 申请上传地址 → POST `/file-urls/batch`
 3. 上传 PDF → PUT 到返回的 upload URL
 4. 轮询结果 → GET `/extract-results/batch/{batchID}`（`pollMineruExtractResult`）
-5. 下载 ZIP → 4 种下载策略回退（直连 / Bearer 认证 / HTTP→HTTPS / HTTPS+Bearer）
+5. 下载 ZIP → 匿名下载优先，HTTP 地址先尝试 HTTPS；仅配置 API 同源的 HTTPS 地址可回退到 Bearer 认证，认证请求拒绝重定向，第三方下载地址和 HTTP 请求不携带 Token。
 6. 提取 Markdown → 解压 ZIP，`pickMarkdownEntry()` 选择 `.md` 文件（优先匹配原始文件名）
 7. `saveResultAsMarkdownAttachment()` 调用 `saveDocumentAttachment()` 保存：
    - Markdown 始终使用 `images/image-N.ext` 相对引用，图片保存在同目录 images 文件夹
    - 默认注册 Markdown；开启 HTML 时只注册 HTML 主附件，并在同一存储目录保留同名 `.md` 和图片
    - 文件夹 HTML 与 Markdown 共用 images；内嵌 HTML 将图片转为 data URI，但配套 Markdown 仍使用文件夹
-   - 一次解析只调用一次 `Zotero.Attachments.importFromFile()`，附件标签为 `#MinerU-Parse`，父条目为 `#MinerU-Parsed`
+   - 一次解析只调用一次 `Zotero.Attachments.importFromFile()`，附件标签为 `#MinerU-Parse`，父条目为 `#MinerU-Parse` 和 `#MinerU-Parsed`
    - 文件保存失败时清理未完成附件；临时输出目录在 finally 中清理
 
 存储结构：
@@ -183,9 +200,10 @@ Parent Item (论文条目)
 1. `getLLMSettings()` 校验 LLM 配置，验证额外 JSON 参数。
 2. `collectSummaryTasks()` 查找解析附件并按完整总结笔记去重，不再回退到解析笔记正文。
 3. `readSourceMarkdown()` 读取原始 Markdown：Markdown 主附件直接读取；HTML 主附件读取同目录同名 `.md`。文件缺失时明确报错，不读取 HTML 页面或内置源数据。
-4. `removeLocalImageReferences()` 去掉本地图片引用，保留 Markdown 正文；仍保留原有 60000 字符截断上限。
-5. POST `{llmApiBaseURL}/chat/completions`，120 秒超时，temperature 0.3。支持目标语言、自定义系统提示词及额外 JSON 参数。
-6. 保存为 `AI Summary {parentTitle}` 笔记，标签 `#MinerU-Summary`。
+4. `removeLocalImageReferences()` 去掉本地图片引用，保留 Markdown 正文，不截断长文。
+5. `summarizeFullDocument()` 对不超过 60000 字符的正文直接总结；超出时按最多 50000 字符分段，优先沿换行切分且不切断 UTF-16 代理对。顺序总结每段，再汇总全部研究笔记；中间结果仍超预算时继续分层压缩（最多 6 轮），未缩短则明确报错。长文会增加模型请求次数和费用。
+6. POST `{llmApiBaseURL}/chat/completions`，每次请求 120 秒超时，temperature 0.3。各阶段保留目标语言、自定义系统提示词及额外 JSON 参数；分段和汇总阶段额外说明输入性质。
+7. 仅最终汇总成功后保存为 `AI Summary {parentTitle}` 笔记，标签 `#MinerU-Summary`；中间结果不保存，任一步失败均不生成完整总结。
 
 ## AI 翻译流程
 
@@ -193,11 +211,18 @@ Parent Item (论文条目)
 2. 使用与总结共用的 `readSourceMarkdown()` 读取原始 Markdown。不要从 HTML 页面、HTML 内置源数据或笔记生成翻译输入。
 3. `inlineStoredImagesInMarkdownAttachment()` 在本地读取图片字节，并将引用规范化为内部标识。方法名虽含 inline，这些图片数据并不发送给模型。
 4. `splitMarkdownIntoChunks()` 按字符预算合并段落。Markdown、仅译文 HTML、双栏 HTML 使用同一分块策略，不能为双栏改成每自然段一个请求。
-5. 限流并发调用 `callLLMForTranslation()`，默认并发 3，请求超时 180 秒，每个失败分块自动重试。
+5. 限流并发调用 `callLLMForTranslation()`，默认并发 3，请求超时 180 秒。临时错误自动重试前等待指数退避（1 秒起、±20% 抖动、基数最多 30 秒），同时考虑 Retry-After（秒数或 HTTP 日期，上限 120 秒）；除 408/425/429 外的 4xx 不自动重试，最后一次失败后不再等待。失败记录保留实际尝试次数。
 6. 成功结果按索引保留；自动重试耗尽后，等当前批次结束再提供“重试失败段落 / 保存已完成译文 / 放弃”。仅重试失败分块；无成功译文时不显示保存选项，关闭弹窗等同放弃。
 7. 按原分块顺序合成结果并保存。`saveTranslationAsMarkdownAttachment()` 名称沿用历史，但实际支持 Markdown 和 HTML。
 8. 部分结果标题和正文顶部注明“未完成”和完成段数，标签为 `#MinerU-Translation-Partial`。失败位置保留原文并标注；双栏左侧为原文，右侧仅标“未翻译”。
 9. 保存部分结果后继续下一篇文献，最终分别报告完整、部分保存和失败数量。不实现跨任务续译，不自动删除部分附件。
+
+### 网络超时与 LLM 完整性
+
+- MinerU 申请上传、上传、轮询、结果下载及总结/翻译请求使用 `withRequestTimeout()`，将 AbortSignal 传给 fetch，超时或失败时主动中止；超时涵盖响应正文读取。普通 `withTimeout()` 继续用于嵌图等非网络操作。
+- MinerU 单次网络请求使用 `timeoutSec`；轮询请求与等待受剩余总时限约束。下载的每个候选地址各有一次请求时限。
+- `getLLMResponseContent()` 共用于总结和翻译：明确的 finish_reason 只接受 stop，length、content_filter、tool_calls 等均报错；兼容未提供 finish_reason 的服务，正文仍必须为非空字符串。
+- 截断译文进入现有分段重试和部分保存流程，截断内容本身不作为成功分块保留；不声称能检测模型未报告的内容遗漏。
 
 ### 图片隔离与文字批量翻译
 
@@ -239,6 +264,12 @@ Parent Item (论文条目)
 
 `saveDocumentAttachment()` 使用 `renderDocumentBody()` 和 `renderHTMLMath()`，通过内置 `vendor/katex/katex.min.js` 将公式渲染为 MathML，支持离线查看，无需远程脚本或字体。无效公式保留源码并标示错误。不要将完整 HTML、MathML 或页面样式发送给总结或翻译模型。
 
+### 自建渲染器的内容边界
+
+- Markdown 链接仅允许 HTTP(S)、mailto、zotero 和相对链接；拒绝 javascript、data、file 等协议及控制字符，校验兼顾 HTML 实体编码。
+- 原始 HTML 表格先经原生 DOMParser 解析，再保留表格及基础格式元素、受限属性和安全链接；删除事件、样式及活动内容。解析器不可用或失败时转义源码，不直接返回原始 HTML。公式标记在过滤后转换。
+- 本地图片读取以当前 Markdown 所在目录为边界，拒绝越界的 `..`、编码后的越界、绝对路径、控制字符、备用数据流及 Windows 尾部点/空格路径；保留正常相对图片、盘符路径和 UNC 基目录。此检查为路径层面的限制，未额外解析文件系统符号链接。
+
 ## 图片嵌入
 
 - 从 MinerU ZIP 结果中提取图片，支持 png/jpg/jpeg/gif/webp/bmp/svg/tif/tiff
@@ -260,6 +291,8 @@ preferences.xhtml 分两个区域：MinerU 设置 + LLM 设置，Grid 布局（1
 - **测试 MinerU 连接** — POST `/file-urls/batch` 验证 API 可用性
 - **测试 LLM 连接** — POST `/chat/completions` 验证 LLM 可用性（30s 超时）
 
+设置保存先校验全部字段，再写入偏好；任何校验失败都不写入本次设置。数值必须为完整整数且符合界面最小/最大值，额外 JSON 不得覆盖 model/messages。错误字段带 `aria-invalid` 和红色轮廓，自动保存也显示错误但不抢焦点；显式保存会聚焦错误字段。校验通过后清除错误；两个连接测试均在校验失败时停止，避免使用旧配置。Token 和 LLM Key 保存前去除空白及 Bearer 前缀。
+
 MinerU 解析相关设置项补充：
 - Markdown 附件默认带图保存，不受设置开关影响
 - **转化笔记时带图** — 控制“Markdown 转笔记”菜单生成的 Zotero 笔记是否嵌图，默认关闭
@@ -280,10 +313,21 @@ MinerU 解析相关设置项补充：
 node --check mineru.js
 node --check preferences.js
 node tests/output-formats.test.cjs
+node tests/network-reliability.test.cjs
+node tests/related-items.test.cjs
+node --test tests/document-safety.test.cjs tests/settings-safety.test.cjs
+node --test tests/task-locks.test.cjs
+node --test tests/result-tags.test.cjs
 git diff --check
 ```
 
 测试模拟 Zotero、存储和模型，覆盖解析附件及配套 Markdown、图片与公式、输出模式、文字片段还原、异常返回、重试和部分保存、批处理继续、显式附件选择、总结原始 Markdown 读取与缺失报错，以及双栏请求数一致性。
+
+网络回归测试另覆盖 Token 来源限制、认证请求禁用重定向、请求及正文读取超时中止、上传阶段报错、超时后重试不叠加、轮询总时限、Retry-After 和永久错误不重试、LLM 截断返回拒绝，以及长文分段覆盖、分层汇总、自定义 Prompt 和不收敛保护。
+
+安全回归测试覆盖图片路径边界、危险/编码链接、DOMParser 失败时转义、设置校验零写入、数值范围、JSON 保留字段和连接测试阻断。用浏览器打开 `tests/html-safety.browser.html`，结果应显示 PASS；该测试使用真实 DOMParser 验证表格属性过滤，同时保留表格、基础格式、公式与正常链接。
+
+任务互斥回归测试覆盖四个命令的跨窗口重复执行、保存阶段保护、处理和保存失败后重试、尚未执行条目的批次预留、混合选择继续执行、不同操作并行、确认弹窗重入、取消与窗口异常后释放，以及菜单可用性恢复。输出格式测试的批处理模拟必须使用不同父条目 ID 表示不同文献。
 
 - 设置 XHTML 修改后检查 XML 结构；运行代码变更需执行相关回归测试。
 - 这些测试不能替代 Zotero 实际界面、附件打开、重启和同步验证。未实际验证时须明确说明，不能据模拟测试声称同步已通过。

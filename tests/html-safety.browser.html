@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MinerU HTML safety regression</title>
+<pre id="result">RUNNING</pre>
+<script>var Zotero = { debug() {}, logError() {} };</script>
+<script src="../mineru.js"></script>
+<script src="../vendor/katex/katex.min.js"></script>
+<script>
+try {
+  const m = ZoteroMineru;
+  m.mathRenderer = katex;
+  const assert = (condition, message) => { if (!condition) throw Error(message); };
+  const raw = '<table onclick="attack()" style="background:url(javascript:attack)"><tbody><tr><td colspan="2" align="center" onmouseover="attack()">'
+    + '<strong>Results</strong> $x^2$ <sup>1</sup>'
+    + '<a href="java&#x73;cript&colon;attack()" onclick="attack()">bad</a>'
+    + '<a href="https://example.test/paper" title="paper">good</a>'
+    + '<img src="data:text/html,bad" onerror="attack()">'
+    + '<scr' + 'ipt>attack()</scr' + 'ipt><iframe srcdoc="bad"></iframe>'
+    + '<svg><a href="javascript:attack()">svg</a></svg>'
+    + '<form><input autofocus onfocus="attack()"></form>'
+    + '</td></tr></tbody></table>';
+  const html = m.normalizeHTMLTableForNote(raw);
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  assert(doc.querySelector('td[colspan="2"][align="center"]'), 'table structure and alignment');
+  assert(doc.querySelector('strong').textContent === 'Results', 'formatting retained');
+  assert(doc.querySelector('sup').textContent === '1', 'superscripts retained');
+  assert(doc.querySelector('span.math').textContent === '$x^2$', 'table math retained');
+  assert(doc.querySelector('a[href="https://example.test/paper"][title="paper"]'), 'safe links retained');
+  assert(!doc.querySelector('script,style,iframe,object,embed,svg,math,form,input'), 'active elements removed');
+  assert(!doc.querySelector('[onclick],[onmouseover],[onerror],[style],[srcdoc]'), 'active attributes removed');
+  assert(!doc.querySelector('a[href^="javascript"],img[src]'), 'active URLs removed');
+  assert(m.renderHTMLMath(html).includes('<math'), 'sanitized table formulas still render');
+  for (const input of ['<table><tr><td><a href="java&#10;script:attack()">x</a></td></tr></table>',
+    '<table><tr><td><img src="x" onerror="attack()"><object data="bad"></object></td></tr></table>',
+    '<table><tr><td><img src="../private.png"><img src="images/../../private.png"></td></tr></table>']) {
+    const output = new DOMParser().parseFromString(m.normalizeHTMLTableForNote(input), 'text/html');
+    assert(!output.querySelector('[onerror],object,a[href]'), 'malformed and encoded input filtered');
+    assert(!output.querySelector('img[src*=".."]'), 'local images stay in the attachment directory');
+  }
+  document.getElementById('result').textContent = 'PASS: native DOM table sanitization, safe formatting, math, links and encoded attacks';
+} catch (error) {
+  document.getElementById('result').textContent = 'FAIL: ' + error.stack;
+}
+</script>

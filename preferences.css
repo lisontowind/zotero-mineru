@@ -47,6 +47,11 @@
 	color: #1d6e36;
 }
 
+[aria-invalid="true"] {
+	outline: 2px solid #b03232;
+	outline-offset: 1px;
+}
+
 .mineru-test-output {
 	margin: 12px 0 0;
 	padding: 10px;

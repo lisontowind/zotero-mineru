@@ -5,6 +5,7 @@ ZoteroMineru = {
 	initialized: false,
 	menuRegistered: false,
 	popupListeners: new WeakMap(),
+	activeTaskKeys: new Set(),
 	
 	PREF_BRANCH: "extensions.zotero-mineru.",
 	ROOT_MENU_ID: "zotero-mineru-menu",
@@ -42,7 +43,7 @@ ZoteroMineru = {
 				id: this.CONTEXT_MENU_ID,
 				label: "使用 MinerU 解析 PDF 并保存为附件",
 				l10nID: "zotero-mineru-menu-parse-pdf",
-				getTasks: (selectedItems) => this.collectPDFTasks(selectedItems),
+				getTasks: (selectedItems) => this.getAvailableTasks("parse", this.collectPDFTasks(selectedItems)),
 				run: ({ window, selectedItems }) => this.handleParseCommand({ window, selectedItems }),
 				errorPrefix: "执行失败"
 			},
@@ -50,7 +51,7 @@ ZoteroMineru = {
 				id: this.MARKDOWN_NOTE_MENU_ID,
 				label: "将 MinerU 解析附件转为笔记",
 				l10nID: "zotero-mineru-menu-markdown-to-note",
-				getTasks: (selectedItems) => this.collectMarkdownToNoteTasks(selectedItems),
+				getTasks: (selectedItems) => this.getAvailableTasks("note", this.collectMarkdownToNoteTasks(selectedItems)),
 				run: ({ window, selectedItems }) => this.handleMarkdownToNoteCommand({ window, selectedItems }),
 				errorPrefix: "转笔记失败"
 			},
@@ -58,7 +59,7 @@ ZoteroMineru = {
 				id: this.SUMMARY_MENU_ID,
 				label: "使用 AI 总结文献",
 				l10nID: "zotero-mineru-menu-ai-summary",
-				getTasks: (selectedItems) => this.collectSummaryTasks(selectedItems),
+				getTasks: (selectedItems) => this.getAvailableTasks("summary", this.collectSummaryTasks(selectedItems)),
 				run: ({ window, selectedItems }) => this.handleSummaryCommand({ window, selectedItems }),
 				errorPrefix: "AI 总结失败"
 			},
@@ -66,7 +67,7 @@ ZoteroMineru = {
 				id: this.TRANSLATE_MENU_ID,
 				label: "使用 AI 翻译文献",
 				l10nID: "zotero-mineru-menu-ai-translate",
-				getTasks: (selectedItems) => this.collectTranslateTasks(selectedItems),
+				getTasks: (selectedItems) => this.getAvailableTasks("translate", this.collectTranslateTasks(selectedItems)),
 				run: ({ window, selectedItems }) => this.handleTranslateCommand({ window, selectedItems }),
 				errorPrefix: "AI 翻译失败"
 			}
@@ -79,6 +80,40 @@ ZoteroMineru = {
 			Zotero.logError(e);
 			this.showAlert(window, "MinerU", `${definition.errorPrefix}: ${e.message || e}`);
 		});
+	},
+
+	getTaskKey(operation, task) {
+		// Parse each source PDF independently; derived notes/results belong to the parent.
+		let item = operation === "parse" ? task.attachment : (task.parentItem || task.sourceAttachment);
+		if (!item?.id) throw new Error("任务缺少有效的 Zotero 条目 ID");
+		return `${operation}:${item.id}`;
+	},
+
+	getAvailableTasks(operation, tasks) {
+		let seen = new Set();
+		return tasks.filter(task => {
+			let key = this.getTaskKey(operation, task);
+			if (seen.has(key) || this.activeTaskKeys.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+	},
+
+	async runTaskBatch(operation, tasks, window, run) {
+		// Reserve queued tasks too, before the first await or modal confirmation.
+		let available = this.getAvailableTasks(operation, tasks);
+		if (!available.length) {
+			this.showAlert(window, "MinerU 任务正在进行", "所选条目的同类任务正在处理，请等待当前任务完成后再试。");
+			return;
+		}
+		let keys = available.map(task => this.getTaskKey(operation, task));
+		for (let key of keys) this.activeTaskKeys.add(key);
+		try {
+			return await run(available, tasks.length - available.length);
+		}
+		finally {
+			for (let key of keys) this.activeTaskKeys.delete(key);
+		}
 	},
 
 	registerMenuForZotero8() {
@@ -288,6 +323,14 @@ ZoteroMineru = {
 		};
 	},
 	
+	async tagResultParent(parentItem, tagName) {
+		if (!parentItem) return;
+		// Keep child tags for result discovery and mirror them on the literature item.
+		parentItem.addTag(tagName, 0);
+		if (tagName === "#MinerU-Parse") parentItem.addTag("#MinerU-Parsed", 0);
+		await parentItem.saveTx();
+	},
+
 	parentHasNoteWithTag(parentItem, tagName) {
 		if (!parentItem) return false;
 		let noteIDs = parentItem.getNotes();
@@ -438,10 +481,15 @@ ZoteroMineru = {
 			this.showAlert(window, "MinerU", "当前选择里没有可解析的 PDF 附件。");
 			return;
 		}
-		
+		return this.runTaskBatch("parse", tasks, window, (available, skipped) =>
+			this.runParseTasks({ window, tasks: available, settings, skipped }));
+	},
+
+	async runParseTasks({ window, tasks, settings, skipped = 0 }) {
 		let progress = new Zotero.ProgressWindow({ closeOnClick: true });
 		progress.changeHeadline("MinerU PDF 解析");
 		progress.show();
+		if (skipped) progress.addDescription(`跳过 ${skipped} 项重复或正在进行的任务`);
 		
 		let successes = 0;
 		let failures = [];
@@ -594,6 +642,7 @@ ZoteroMineru = {
 				url: `${settings.apiBaseURL}/file-urls/batch`,
 				token: settings.apiToken,
 				method: "POST",
+				timeoutMS: settings.timeoutMS,
 				body: uploadPayload
 			});
 			if (applyUploadResult.code !== 0) {
@@ -610,14 +659,17 @@ ZoteroMineru = {
 				phase: "上传 PDF",
 				progress: 35
 			});
-			let uploadResponse = await fetch(uploadURL, {
-				method: "PUT",
-				body: fileBytes
-			});
-			if (!uploadResponse.ok) {
-				let errText = await uploadResponse.text();
-				throw new Error(`上传 PDF 失败 ${uploadResponse.status}: ${errText.slice(0, 300)}`);
-			}
+			await this.withRequestTimeout(async (signal) => {
+				let uploadResponse = await fetch(uploadURL, {
+					method: "PUT",
+					body: fileBytes,
+					signal
+				});
+				let uploadText = await uploadResponse.text();
+				if (!uploadResponse.ok) {
+					throw this.createHTTPError(uploadResponse, uploadText, "上传 PDF 失败");
+				}
+			}, settings.timeoutMS, "上传 PDF");
 			
 			this.reportParseStatus(statusContext, {
 				phase: "等待 MinerU 解析",
@@ -646,6 +698,7 @@ ZoteroMineru = {
 				zipURL,
 				apiBaseURL: settings.apiBaseURL,
 				token: settings.apiToken,
+				timeoutMS: settings.timeoutMS,
 				statusContext
 			});
 			
@@ -701,21 +754,38 @@ ZoteroMineru = {
 		}
 	},
 
-	async fetchZipWithOptions({ url, token, withAuth }) {
+	canSendDownloadToken(url, apiBaseURL) {
+		try {
+			let target = new URL(url);
+			let api = new URL(apiBaseURL);
+			return target.protocol === "https:" && target.origin === api.origin
+				&& !target.username && !target.password;
+		}
+		catch (_e) { return false; }
+	},
+
+	async fetchZipWithOptions({ url, apiBaseURL, token, withAuth, signal }) {
 		let headers = new Headers();
 		if (withAuth && token) {
+			if (!this.canSendDownloadToken(url, apiBaseURL)) {
+				throw new Error("已阻止向非 API 同源 HTTPS 地址发送 Token");
+			}
 			headers.set("Authorization", `Bearer ${token}`);
 		}
 		return await fetch(url, {
 			method: "GET",
-			headers
+			headers,
+			signal,
+			// Authenticated downloads must never forward credentials through redirects.
+			redirect: withAuth ? "error" : "follow"
 		});
 	},
 
-	async downloadParseResultZip({ zipURL, apiBaseURL, token, statusContext = null }) {
+	async downloadParseResultZip({ zipURL, apiBaseURL, token, timeoutMS = 120000, statusContext = null }) {
 		let normalizedURL = this.normalizeDownloadURL(zipURL, apiBaseURL);
 		let candidates = [];
 		let addCandidate = (url, withAuth, label) => {
+			if (withAuth && (!token || !this.canSendDownloadToken(url, apiBaseURL))) return;
 			let key = `${url}|${withAuth ? "auth" : "anon"}`;
 			if (candidates.some((item) => item.key === key)) return;
 			candidates.push({
@@ -726,13 +796,13 @@ ZoteroMineru = {
 			});
 		};
 
-		addCandidate(normalizedURL, false, "直连下载");
-		addCandidate(normalizedURL, true, "直连下载（Bearer）");
 		if (normalizedURL.startsWith("http://")) {
 			let httpsURL = `https://${normalizedURL.slice("http://".length)}`;
 			addCandidate(httpsURL, false, "HTTPS 回退");
 			addCandidate(httpsURL, true, "HTTPS 回退（Bearer）");
 		}
+		addCandidate(normalizedURL, false, "直连下载");
+		addCandidate(normalizedURL, true, "直连下载（Bearer）");
 
 		let failures = [];
 		for (let i = 0; i < candidates.length; i++) {
@@ -742,20 +812,19 @@ ZoteroMineru = {
 				progress: 75
 			});
 			try {
-				let response = await this.fetchZipWithOptions({
-					url: attempt.url,
-					token,
-					withAuth: attempt.withAuth
-				});
-				if (!response.ok) {
-					let errText = await response.text();
-					failures.push(`${attempt.label}: HTTP ${response.status}`);
-					if (i < candidates.length - 1) {
-						continue;
+				return await this.withRequestTimeout(async (signal) => {
+					let response = await this.fetchZipWithOptions({
+						url: attempt.url,
+						apiBaseURL,
+						token,
+						withAuth: attempt.withAuth,
+						signal
+					});
+					if (!response.ok) {
+						throw this.createHTTPError(response, await response.text(), "下载解析结果失败");
 					}
-					throw new Error(`下载解析结果失败 ${response.status}: ${errText.slice(0, 300)}`);
-				}
-				return new Uint8Array(await response.arrayBuffer());
+					return new Uint8Array(await response.arrayBuffer());
+				}, timeoutMS, "下载解析结果");
 			}
 			catch (e) {
 				let message = e?.message || String(e);
@@ -771,7 +840,7 @@ ZoteroMineru = {
 		throw new Error(`下载解析结果网络失败 (${urlHint})：${reason}`);
 	},
 		
-	async requestMineruJSON({ url, token, method = "GET", body = null }) {
+	async requestMineruJSON({ url, token, method = "GET", body = null, timeoutMS = 120000 }) {
 		let headers = new Headers({
 			"Accept": "application/json",
 			"Authorization": `Bearer ${token}`
@@ -785,18 +854,19 @@ ZoteroMineru = {
 			requestOptions.body = JSON.stringify(body);
 		}
 		
-		let response = await fetch(url, requestOptions);
-		let responseText = await response.text();
-		if (!response.ok) {
-			throw new Error(`官方 API 请求失败 ${response.status}: ${responseText.slice(0, 500)}`);
-		}
-		
-		try {
-			return JSON.parse(responseText);
-		}
-		catch (_e) {
-			throw new Error(`官方 API 返回的 JSON 无法解析: ${responseText.slice(0, 500)}`);
-		}
+		return await this.withRequestTimeout(async (signal) => {
+			let response = await fetch(url, { ...requestOptions, signal });
+			let responseText = await response.text();
+			if (!response.ok) {
+				throw this.createHTTPError(response, responseText, "官方 API 请求失败");
+			}
+			try {
+				return JSON.parse(responseText);
+			}
+			catch (_e) {
+				throw new Error(`官方 API 返回的 JSON 无法解析: ${responseText.slice(0, 500)}`);
+			}
+		}, timeoutMS, "MinerU API 请求");
 	},
 	
 	async pollMineruExtractResult({ apiBaseURL, token, batchID, dataID, timeoutMS, pollIntervalMS, statusContext = null }) {
@@ -805,7 +875,8 @@ ZoteroMineru = {
 		while (Date.now() - startTime < timeoutMS) {
 			let statusResult = await this.requestMineruJSON({
 				url: `${apiBaseURL}/extract-results/batch/${encodeURIComponent(batchID)}`,
-				token
+				token,
+				timeoutMS: Math.max(1, timeoutMS - (Date.now() - startTime))
 			});
 			if (statusResult.code !== 0) {
 				throw new Error(`查询解析状态失败: ${statusResult.msg || "unknown error"}`);
@@ -827,7 +898,8 @@ ZoteroMineru = {
 				throw new Error(result.err_msg || "MinerU 解析失败");
 			}
 			
-			await Zotero.Promise.delay(pollIntervalMS);
+			let remainingMS = timeoutMS - (Date.now() - startTime);
+			if (remainingMS > 0) await Zotero.Promise.delay(Math.min(pollIntervalMS, remainingMS));
 		}
 		throw new Error(`MinerU 解析超时，最后状态: ${lastState || "unknown"}`);
 	},
@@ -1456,21 +1528,70 @@ ZoteroMineru = {
 		if (!raw) return "";
 		try {
 			if (typeof DOMParser !== "function") {
-				return raw;
+				return this.escapeHTML(raw);
 			}
 			let doc = new DOMParser().parseFromString(`<body>${raw}</body>`, "text/html");
 			let table = doc.querySelector("table");
 			if (!table) {
-				return raw;
+				return this.escapeHTML(raw);
 			}
-			table.querySelectorAll("script, style").forEach((node) => node.remove());
+			this.sanitizeTableElement(table);
 			this.convertMathMarkersInsideTable(table, doc);
-			return table.outerHTML || raw;
+			return table.outerHTML || this.escapeHTML(raw);
 		}
 		catch (e) {
 			this.log(`Normalize HTML table failed: ${e}`);
-			return raw;
+			return this.escapeHTML(raw);
 		}
+	},
+
+	sanitizeTableElement(table) {
+		let allowed = new Set(["table", "caption", "thead", "tbody", "tfoot", "tr", "td", "th", "colgroup", "col",
+			"p", "div", "span", "br", "b", "i", "strong", "em", "u", "s", "sup", "sub", "code", "pre", "a", "img", "ul", "ol", "li"]);
+		let blocked = new Set(["script", "style", "iframe", "object", "embed", "template", "svg", "math", "form", "input", "button", "link", "meta", "base"]);
+		for (let node of [table, ...table.querySelectorAll("*")]) {
+			let tag = node.localName.toLowerCase();
+			if (blocked.has(tag) || node.namespaceURI !== "http://www.w3.org/1999/xhtml") {
+				node.remove();
+				continue;
+			}
+			if (!allowed.has(tag)) {
+				node.replaceWith(...node.childNodes);
+				continue;
+			}
+			for (let attribute of [...node.attributes]) {
+				let name = attribute.name.toLowerCase(), value = attribute.value;
+				let keep = name === "title" || (tag === "img" && name === "alt")
+					|| (["td", "th"].includes(tag) && ["rowspan", "colspan"].includes(name) && /^[1-9]\d{0,2}$/.test(value))
+					|| (["table", "tr", "td", "th", "col", "colgroup"].includes(tag) && name === "align" && /^(left|center|right)$/i.test(value))
+					|| (tag === "th" && name === "scope" && /^(row|col|rowgroup|colgroup)$/.test(value))
+					|| (tag === "a" && name === "href" && this.isSafeDocumentURL(value))
+					|| (tag === "img" && name === "src" && this.isSafeDocumentURL(value, true));
+				if (!keep) node.removeAttribute(attribute.name);
+			}
+		}
+	},
+
+	isSafeDocumentURL(value, image = false) {
+		// Decode entities for validation too: inline Markdown has already been escaped.
+		let url = String(value || "").trim();
+		for (let round = 0; round < 3; round++) {
+			url = url.replace(/&amp;/gi, "&").replace(/&#(x[0-9a-f]+|\d+);?/gi, (_match, number) => {
+				let code = number[0].toLowerCase() === "x" ? parseInt(number.slice(1), 16) : Number(number);
+				return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\u0000";
+			}).replace(/&colon;/gi, ":").replace(/&(?:tab|newline);/gi, "\u0000");
+		}
+		if (!url || /[\u0000-\u0020\u007f-\u009f\\]/.test(url)) return false;
+		if (/^https?:\/\//i.test(url)) return true;
+		if (image && /^data:image\/(?:png|jpe?g|gif|webp|bmp|svg\+xml|tiff?);base64,[a-z0-9+/=]+$/i.test(url)) return true;
+		if (image && /^zotero-mineru-image:\/\/img-\d+$/.test(url)) return true;
+		if (!image && /^(mailto:|zotero:\/\/)/i.test(url)) return true;
+		if (url.includes(":") || url.startsWith("//")) return false;
+		if (image) {
+			try { return !!this.resolveStoredAttachmentImagePath("/mineru/document.md", url); }
+			catch (_e) { return false; }
+		}
+		return true;
 	},
 
 	convertMathMarkersInsideTable(tableElement, doc) {
@@ -1763,6 +1884,7 @@ ZoteroMineru = {
 		escaped = escaped.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, target) => {
 			let token = `@@I${imageTokens.length}@@`;
 			let targetInfo = this.parseMarkdownImageTarget(target);
+			if (!this.isSafeDocumentURL(targetInfo.url, true)) return alt;
 			let src = this.escapeHTML(targetInfo.url || "");
 			let altText = this.escapeHTML(alt || "");
 			let titleAttr = targetInfo.title
@@ -1774,6 +1896,7 @@ ZoteroMineru = {
 
 		escaped = escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, target) => {
 			let info = this.parseMarkdownImageTarget(target);
+			if (!this.isSafeDocumentURL(info.url)) return label;
 			let href = this.escapeHTML(info.url || "");
 			let titleAttr = info.title
 				? ` title="${this.escapeHTML(info.title)}"`
@@ -1983,10 +2106,7 @@ ZoteroMineru = {
 			this.trySetNoteTitle(note, noteTitle);
 			note.addTag("#MinerU-Parse", 0);
 			await note.saveTx();
-			if (parentItem) {
-				parentItem.addTag("#MinerU-Parsed", 0);
-				await parentItem.saveTx();
-			}
+			await this.tagResultParent(parentItem, "#MinerU-Parse");
 	},
 
 	rewriteImagePathsForStorage(rawMarkdownText, embeddedImages) {
@@ -2144,10 +2264,7 @@ ZoteroMineru = {
 			images: parsedResult.embeddedImages || [],
 			format: settings.outputFormat, imageMode: settings.imageMode, tag: "#MinerU-Parse", keepMarkdown: true
 		});
-		if (parentItem) {
-			parentItem.addTag("#MinerU-Parsed", 0);
-			await parentItem.saveTx();
-		}
+		await this.tagResultParent(parentItem, "#MinerU-Parse");
 		let warning = null;
 		if (settings.parseLinkSourcePDF !== false) {
 			try {
@@ -2222,16 +2339,32 @@ ZoteroMineru = {
 	resolveStoredAttachmentImagePath(markdownPath, resourceURL) {
 		let normalizedRef = this.normalizeArchiveReference(resourceURL)
 		if (!normalizedRef || this.isExternalResourceURL(normalizedRef)) return ""
-		if (normalizedRef.startsWith("/")) return ""
+		normalizedRef = normalizedRef.replace(/\\/g, "/");
+		if (normalizedRef.startsWith("/") || /[:\u0000-\u001f\u007f]/.test(normalizedRef)) {
+			throw new Error("图片路径必须位于附件目录内");
+		}
+		let parts = [];
+		for (let part of normalizedRef.split("/")) {
+			if (!part || part === ".") continue;
+			if (part === "..") {
+				if (!parts.length) throw new Error("图片路径超出附件目录");
+				parts.pop();
+			}
+			else {
+				// Windows strips trailing dots/spaces when opening a file.
+				if (/[. ]$/.test(part)) throw new Error("图片路径包含不安全的目录或文件名");
+				parts.push(part);
+			}
+		}
+		if (!parts.length) return "";
 		let normalizedMarkdownPath = String(markdownPath || "").replace(/\\/g, "/")
 		let slashIndex = normalizedMarkdownPath.lastIndexOf("/")
 		if (slashIndex < 0) return ""
-		let merged = `${normalizedMarkdownPath.slice(0, slashIndex + 1)}${normalizedRef}`
-		let normalizedPath = this.normalizeArchivePath(merged)
+		let normalizedPath = normalizedMarkdownPath.slice(0, slashIndex + 1) + parts.join("/");
 		if (/^[A-Za-z]:\//.test(normalizedPath) || normalizedPath.startsWith("//")) {
 			return normalizedPath.replace(/\//g, "\\")
 		}
-		return normalizedMarkdownPath.startsWith("/") ? "/" + normalizedPath : normalizedPath
+		return normalizedPath
 	},
 
 	async inlineStoredImagesInMarkdownAttachment({ markdownText, markdownPath }) {
@@ -2380,6 +2513,57 @@ ZoteroMineru = {
 			Zotero.logError(e);
 		}
 		return null;
+	},
+
+	async withRequestTimeout(taskFactory, timeoutMS = 120000, label = "网络请求") {
+		let controller = new AbortController();
+		try {
+			// The callback must consume the response body before returning.
+			return await this.withTimeout(() => taskFactory(controller.signal), timeoutMS, label);
+		}
+		catch (error) {
+			controller.abort();
+			throw error;
+		}
+	},
+
+	createHTTPError(response, text, label) {
+		let error = new Error(`${label} ${response.status}: ${String(text || "").slice(0, 500)}`);
+		error.httpStatus = response.status;
+		let retryAfter = response.headers?.get("Retry-After");
+		if (retryAfter) {
+			let seconds = Number(retryAfter);
+			let delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryAfter) - Date.now();
+			if (Number.isFinite(delay)) error.retryAfterMS = Math.min(120000, Math.max(0, delay));
+		}
+		return error;
+	},
+
+	isRetryableError(error) {
+		if (error?.retryable === false) return false;
+		let status = error?.httpStatus;
+		return !status || [408, 425, 429].includes(status) || status >= 500;
+	},
+
+	async waitForRetry(error, attempt) {
+		let backoff = Math.min(30000, 1000 * 2 ** (attempt - 1));
+		let delay = Math.max(Math.round(backoff * (0.8 + Math.random() * 0.4)), error?.retryAfterMS || 0);
+		await Zotero.Promise.delay(delay);
+	},
+
+	getLLMResponseContent(result) {
+		let choice = result?.choices?.[0];
+		let reason = choice?.finish_reason;
+		if (reason && reason !== "stop") {
+			let error = new Error(reason === "length"
+				? "LLM 输出被截断，未保存为完整结果。请减小翻译分段或调整模型输出上限后重试。"
+				: `LLM 未完整完成回复（${reason}），未保存为完整结果。`);
+			error.code = "LLM_INCOMPLETE";
+			throw error;
+		}
+		let content = choice?.message?.content;
+		if (typeof content !== "string" || !content.trim()) throw new Error("LLM 返回内容为空或格式无效");
+		return content.trim();
 	},
 
 	async withTimeout(taskFactory, timeoutMS, label = "任务") {
@@ -2593,7 +2777,9 @@ ZoteroMineru = {
 	renderDocumentBody(markdown) {
 		let imageTokens = [];
 		let token = (src, alt = "") => {
-			if (!/^(images\/|data:image\/|https?:\/\/)/i.test(src)) throw new Error("不支持的图片引用：" + src.slice(0, 100));
+			if (!/^(images\/|data:image\/|https?:\/\/)/i.test(src) || !this.isSafeDocumentURL(src, true)) {
+				throw new Error("不支持的图片引用：" + src.slice(0, 100));
+			}
 			let key = "MINERUIMAGETOKEN" + imageTokens.length + "END";
 			imageTokens.push({ key, html: '<img src="' + this.escapeHTML(src) + '" alt="' + this.escapeHTML(alt) + '">' });
 			return key;
@@ -2815,6 +3001,11 @@ ZoteroMineru = {
 			this.showAlert(window, "MinerU", "当前选择里没有可转为笔记的 MinerU 解析附件。\n（已有 #MinerU-Parse 笔记的条目会被跳过）")
 			return
 		}
+		return this.runTaskBatch("note", tasks, window, (available, skipped) =>
+			this.runMarkdownToNoteTasks({ window, tasks: available, settings, skipped }));
+	},
+
+	async runMarkdownToNoteTasks({ window, tasks, settings, skipped = 0 }) {
 		let shouldContinue = this.showConfirm(
 			window,
 			"MinerU 解析附件转笔记",
@@ -2827,6 +3018,7 @@ ZoteroMineru = {
 		let progress = new Zotero.ProgressWindow({ closeOnClick: true })
 		progress.changeHeadline("MinerU 解析附件转笔记")
 		progress.show()
+		if (skipped) progress.addDescription(`跳过 ${skipped} 项重复或正在进行的任务`);
 
 		let successes = 0
 		let failures = []
@@ -2906,10 +3098,15 @@ ZoteroMineru = {
 			this.showAlert(window, "MinerU", "当前选择的条目没有带 #MinerU-Parse 标签的解析结果，请先使用 MinerU 解析 PDF。");
 			return;
 		}
+		return this.runTaskBatch("summary", tasks, window, (available, skipped) =>
+			this.runSummaryTasks({ window, tasks: available, llmSettings, skipped }));
+	},
 
+	async runSummaryTasks({ window, tasks, llmSettings, skipped = 0 }) {
 		let progress = new Zotero.ProgressWindow({ closeOnClick: true });
 		progress.changeHeadline("AI 文献总结");
 		progress.show();
+		if (skipped) progress.addDescription(`跳过 ${skipped} 项重复或正在进行的任务`);
 
 		let successes = 0;
 		let failures = [];
@@ -2926,9 +3123,6 @@ ZoteroMineru = {
 				}
 				let source = await this.readSourceMarkdown(task.mineruSource);
 				let plainText = this.removeLocalImageReferences(source.markdown);
-				if (plainText.length > 60000) {
-					plainText = plainText.slice(0, 60000);
-				}
 				if (!plainText.trim()) {
 					throw new Error("MinerU 解析内容为空");
 				}
@@ -2936,7 +3130,9 @@ ZoteroMineru = {
 				if (typeof itemProgress.setText === "function") {
 					itemProgress.setText(`${title}（调用 LLM）`);
 				}
-				let summary = await this.callLLMForSummary(plainText, llmSettings, llmSettings.summaryLanguage);
+				let summary = await this.summarizeFullDocument(plainText, llmSettings, llmSettings.summaryLanguage, (text) => {
+					if (typeof itemProgress.setText === "function") itemProgress.setText(`${title}（${text}）`);
+				});
 
 				if (typeof itemProgress.setText === "function") {
 					itemProgress.setText(`${title}（保存笔记）`);
@@ -2969,7 +3165,48 @@ ZoteroMineru = {
 		}
 	},
 
-	async callLLMForSummary(plainText, llmSettings, language) {
+	splitSummaryText(text, maxLength = 50000) {
+		let chunks = [];
+		for (let start = 0; start < text.length;) {
+			let end = Math.min(start + maxLength, text.length);
+			if (end < text.length) {
+				let newline = text.lastIndexOf("\n", end - 1);
+				if (newline >= start + maxLength / 2) end = newline + 1;
+				// Do not split a UTF-16 surrogate pair in a long paragraph.
+				if (/[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+			}
+			chunks.push(text.slice(start, end));
+			start = end;
+		}
+		return chunks;
+	},
+
+	async summarizeFullDocument(plainText, llmSettings, language, onProgress = null) {
+		let input = plainText;
+		let round = 0;
+		while (input.length > 60000) {
+			if (round >= 6) throw new Error("长文总结汇总轮次过多，请调整总结 Prompt 使分段结果更简洁后重试。");
+			let chunks = this.splitSummaryText(input);
+			let summaries = [];
+			for (let index = 0; index < chunks.length; index++) {
+				onProgress?.(`分段总结 ${index + 1}/${chunks.length}，第 ${round + 1} 轮`);
+				let summary = await this.callLLMForSummary(chunks[index], llmSettings, language, {
+					stage: round ? "merge" : "chunk", part: index + 1, total: chunks.length
+				});
+				summaries.push(`## Part ${index + 1}/${chunks.length}\n\n${summary}`);
+			}
+			let combined = summaries.join("\n\n");
+			if (combined.length >= input.length) {
+				throw new Error("分段总结未能缩短内容，请调整总结 Prompt 使结果更简洁后重试。");
+			}
+			input = combined;
+			round++;
+		}
+		onProgress?.(round ? "汇总全文总结" : "调用 LLM");
+		return await this.callLLMForSummary(input, llmSettings, language, { stage: round ? "merge" : "document" });
+	},
+
+	async callLLMForSummary(plainText, llmSettings, language, context = {}) {
 		let url = `${llmSettings.apiBaseURL}/chat/completions`;
 		language = language || "中文";
 		let systemPrompt;
@@ -3019,6 +3256,11 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 		let userMessage = language === "中文"
 			? `请总结以下论文内容：\n\n${plainText}`
 			: `Please summarize the following paper:\n\n${plainText}`;
+		if (context.stage === "chunk") {
+			userMessage = `This is source part ${context.part} of ${context.total} of a longer paper. Extract concise research notes for later synthesis in ${language}. Preserve key findings, numbers, limitations and uncertainty; do not infer missing sections.\n\n${plainText}`;
+		} else if (context.stage === "merge") {
+			userMessage = `Synthesize the following partial research notes into a concise, coherent summary in ${language}, following the requested summary format. Preserve key findings and limitations, resolve repetition, and do not invent missing information.\n\n${plainText}`;
+		}
 
 		let payload = {
 			model: llmSettings.model,
@@ -3034,30 +3276,27 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 			["model", "messages"]
 		);
 
-		let doFetch = async () => {
+		let doFetch = async (signal) => {
 			let response = await fetch(url, {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
 					"Authorization": `Bearer ${llmSettings.apiKey}`
 				},
-				body: JSON.stringify(payload)
+				body: JSON.stringify(payload),
+				signal
 			});
 
 			if (!response.ok) {
 				let errText = await response.text();
-				throw new Error(`LLM API 请求失败 ${response.status}: ${errText.slice(0, 500)}`);
+				throw this.createHTTPError(response, errText, "LLM API 请求失败");
 			}
 
 			let result = await response.json();
-			let content = result?.choices?.[0]?.message?.content;
-			if (!content || !content.trim()) {
-				throw new Error("LLM 返回内容为空");
-			}
-			return content.trim();
+			return this.getLLMResponseContent(result);
 		};
 
-		return await this.withTimeout(doFetch, 120000, "LLM API 请求");
+		return await this.withRequestTimeout(doFetch, 120000, "LLM API 请求");
 	},
 
 	async saveSummaryAsNote({ parentItem, summaryText }) {
@@ -3073,6 +3312,7 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 		this.trySetNoteTitle(note, noteTitle);
 		note.addTag("#MinerU-Summary", 0);
 		await note.saveTx();
+		await this.tagResultParent(parentItem, "#MinerU-Summary");
 	},
 
 	// ==================== Translation Feature ====================
@@ -3152,7 +3392,11 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 			this.showAlert(window, "MinerU", "当前选择的条目没有可翻译的 MinerU 解析结果，请先使用 MinerU 解析 PDF。\n（已有翻译结果的条目会被跳过）")
 			return
 		}
+		return this.runTaskBatch("translate", tasks, window, (available, skipped) =>
+			this.runTranslateTasks({ window, tasks: available, llmSettings, skipped }));
+	},
 
+	async runTranslateTasks({ window, tasks, llmSettings, skipped = 0 }) {
 		let language = llmSettings.translateLanguage || "中文"
 		let chunkSize = llmSettings.translateChunkSize || 20000
 		let translateConcurrency = llmSettings.translateConcurrency || 3
@@ -3161,6 +3405,7 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 		let progress = new Zotero.ProgressWindow({ closeOnClick: true })
 		progress.changeHeadline(`AI 文献翻译 → ${language}`)
 		progress.show()
+		if (skipped) progress.addDescription(`跳过 ${skipped} 项重复或正在进行的任务`);
 
 		let partialSaves = 0
 		let successes = 0
@@ -3314,7 +3559,9 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 	async translateChunkWithRetry({ chunkText, chunkIndex, totalChunks, autoRetryCount, translateChunk }) {
 		let maxAttempts = Math.max(autoRetryCount || 0, 0) + 1
 		let lastError = null
+		let attempts = 0
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			attempts = attempt
 			try {
 				let translated = await translateChunk(chunkText, chunkIndex, totalChunks)
 				return {
@@ -3327,13 +3574,15 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 			} catch (e) {
 				lastError = e
 				Zotero.logError(e)
+				if (!this.isRetryableError(e) || attempt === maxAttempts) break
+				await this.waitForRetry(e, attempt)
 			}
 		}
 		return {
 			ok: false,
 			chunkIndex,
 			totalChunks,
-			attempts: maxAttempts,
+			attempts,
 			error: lastError || new Error("翻译失败")
 		}
 	},
@@ -3447,26 +3696,24 @@ Rules:
 			["model", "messages"]
 		)
 
-		let doFetch = async () => {
+		let doFetch = async (signal) => {
 			let response = await fetch(url, {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
 					"Authorization": `Bearer ${llmSettings.apiKey}`
 				},
-				body: JSON.stringify(payload)
+				body: JSON.stringify(payload),
+				signal
 			})
 
 			if (!response.ok) {
 				let errText = await response.text()
-				throw new Error(`LLM API 请求失败 ${response.status}: ${errText.slice(0, 500)}`)
+				throw this.createHTTPError(response, errText, "LLM API 请求失败")
 			}
 
 			let result = await response.json()
-			let content = result?.choices?.[0]?.message?.content
-			if (!content || !content.trim()) {
-				throw new Error("LLM 返回内容为空")
-			}
+			let content = this.getLLMResponseContent(result)
 			if (/data:[^\s<>]*;base64,|zotero-mineru-image:\/\//i.test(content)) throw new Error("翻译返回了图片数据或标识，正文不应包含图片");
 			if (!batch) return content.trim();
 			let translated;
@@ -3480,16 +3727,18 @@ Rules:
 				part.leading + translated[part.index].trim() + part.trailing).join("");
 		}
 
-		return await this.withTimeout(doFetch, 180000, "LLM 翻译请求")
+		return await this.withRequestTimeout(doFetch, 180000, "LLM 翻译请求")
 	},
 
 	async saveTranslationAsMarkdownAttachment({ parentItem, sourceAttachment, translatedText, language, images, settings, pairs, partial = null }) {
+		let tag = partial ? "#MinerU-Translation-Partial" : "#MinerU-Translation";
 		await this.saveDocumentAttachment({
 			libraryID: parentItem.libraryID, parentItem,
 			title: `${partial ? `[未完成 ${partial.completed}/${partial.total}] ` : ""}Translation (${language}) - ${this.getItemFileStem(sourceAttachment, "document")}`,
 			markdown: translatedText, images, pairs,
-			format: settings.outputFormat, imageMode: settings.outputFormat === "html" ? "inline" : "folder", tag: partial ? "#MinerU-Translation-Partial" : "#MinerU-Translation",
+			format: settings.outputFormat, imageMode: settings.outputFormat === "html" ? "inline" : "folder", tag,
 			notice: partial ? `未完成：已翻译 ${partial.completed}/${partial.total} 段；标注“未翻译”的位置保留原文。` : ""
 		});
+		await this.tagResultParent(parentItem, tag);
 	}
 };

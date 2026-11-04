@@ -10,15 +10,20 @@ A Zotero 8/9/10 plugin that sends PDF attachments to the MinerU API, saves parse
 - Parsing always saves Markdown with an `images/` folder. Optional HTML (off by default) becomes the main attachment, keeping Markdown alongside it. HTML can share the images folder or embed images.
 - Preserve extracted images under the parsed attachment's `images/` directory.
 - Generate AI summaries from parsed Markdown or HTML attachments.
+- Summarize the full source: documents over 60,000 characters are summarized in parts and then synthesized. This uses additional model requests and may increase cost; only a successful final summary is saved.
 - Generate AI translations from parsed Markdown or HTML attachments.
 - Image references stay local during translation. Text fragments around images are batched within each chunk, then images are restored in their original positions. Fragment count mismatches trigger retries; image markers are never sent to the model.
 - Translate long documents with chunking, bounded concurrency, automatic retry, and retry-failed-chunks confirmation.
+- Translation retries use exponential backoff and consider Retry-After. Permanent errors such as invalid credentials are not automatically retried. Summary and translation reject responses explicitly reported as truncated or incomplete.
 - Save translations as Markdown (default, with an images folder) or standalone HTML (embedded images). The model only translates Markdown; HTML is rendered locally. HTML supports bilingual columns. Markdown contains only the translation, while the bilingual preference is retained.
 - After failures, retry failed chunks, save completed translations, or discard. Partial output displays completion counts and preserves untranslated source text with a label (bilingual HTML labels the translation column). Partial attachments use `#MinerU-Translation-Partial` and do not block another translation. Cross-task resume is not supported.
 - Existing files remain unchanged; Markdown attachments from released v0.1.58 remain supported.
 - HTML formulas render offline to MathML using bundled KaTeX, including inline, display and bilingual output. Regenerate existing HTML to apply this. Invalid formulas remain visible with an error indicator.
 - Customize the AI summary Prompt in LLM settings; {{language}} uses the selected language. Clear and save to restore the default.
 - Expose all four actions under a single `MinerU` context submenu.
+- Skip overlapping parse, note, summary and translation tasks across windows, including queued entries in a batch. Failed tasks and cancelled note conversions can be started again after the batch finishes.
+- Validate all settings before saving; highlight invalid fields and stop connectivity tests until they are corrected.
+- Filter unsafe links and active table content in the built-in HTML renderer; keep local image references within the attachment directory.
 
 ## Requirements
 
@@ -76,11 +81,13 @@ Open `Edit -> Preferences -> MinerU` and configure the following as needed:
 
 ## Behavior Notes
 
-- Parsed attachments are tagged with `#MinerU-Parse`.
-- Parent items that have already been parsed are tagged with `#MinerU-Parsed`.
-- AI summaries are stored as child notes with the `#MinerU-Summary` tag.
-- AI translations are stored as Markdown attachments with the `#MinerU-Translation` tag.
-- Translation image links are rewritten to point to the source parsed attachment, so translated attachments depend on the original parsed attachment remaining present.
+- Saved parse attachments/notes and their literature parent receive `#MinerU-Parse`; the parent also retains `#MinerU-Parsed`.
+- AI summaries are stored as child notes; both the note and its literature parent receive `#MinerU-Summary`.
+- AI translations use the selected Markdown or HTML format; both the attachment and its literature parent receive `#MinerU-Translation` for complete results or `#MinerU-Translation-Partial` for partial results.
+- Parent tags are added after the result is saved successfully. Existing results are not automatically backfilled. Duplicate detection still checks child attachments/notes, so removing a child result allows regeneration.
+- Markdown translations have their own images folder; HTML translations embed images. Neither depends on the source attachment's image files.
+- The MinerU timeout covers each request, including its response body, and the total polling period. Summary and translation requests use 120 and 180 seconds respectively. Timeouts abort the local request; a task already accepted remotely may still run or incur charges.
+- Result downloads only send the API token to the configured API's HTTPS origin, and authenticated downloads reject redirects. Third-party result URLs are downloaded anonymously.
 
 ## Development
 

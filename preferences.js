@@ -12,8 +12,8 @@ var ZoteroMineruPreferences = {
 		{ id: "mineru-api-token", pref: "apiToken", type: "string" },
 		{ id: "mineru-model-version", pref: "modelVersion", type: "string" },
 		{ id: "mineru-note-include-images", pref: "noteIncludeImages", type: "bool" },
-		{ id: "mineru-poll-interval-sec", pref: "pollIntervalSec", type: "int" },
-		{ id: "mineru-timeout-sec", pref: "timeoutSec", type: "int" },
+		{ id: "mineru-poll-interval-sec", pref: "pollIntervalSec", type: "int", min: 1, max: 60, label: "轮询间隔" },
+		{ id: "mineru-timeout-sec", pref: "timeoutSec", type: "int", min: 5, max: 3600, label: "请求超时" },
 		{ id: "mineru-note-title-prefix", pref: "noteTitlePrefix", type: "string" },
 		{ id: "mineru-llm-api-base-url", pref: "llmApiBaseURL", type: "string" },
 		{ id: "mineru-llm-api-key", pref: "llmApiKey", type: "string" },
@@ -22,9 +22,9 @@ var ZoteroMineruPreferences = {
 		{ id: "mineru-summary-prompt", pref: "summaryPrompt", type: "string" },
 		{ id: "mineru-summary-request-json", pref: "summaryRequestJSON", type: "string" },
 		{ id: "mineru-translate-language", pref: "translateLanguage", type: "string" },
-		{ id: "mineru-translate-chunk-size", pref: "translateChunkSize", type: "int" },
-		{ id: "mineru-translate-concurrency", pref: "translateConcurrency", type: "int" },
-		{ id: "mineru-translate-retry-count", pref: "translateRetryCount", type: "int" },
+		{ id: "mineru-translate-chunk-size", pref: "translateChunkSize", type: "int", min: 5000, max: 60000, label: "翻译分段字符数" },
+		{ id: "mineru-translate-concurrency", pref: "translateConcurrency", type: "int", min: 1, max: 8, label: "翻译并发请求数" },
+		{ id: "mineru-translate-retry-count", pref: "translateRetryCount", type: "int", min: 1, max: 5, label: "翻译自动重试次数" },
 		{ id: "mineru-translate-request-json", pref: "translateRequestJSON", type: "string" }
 	],
 
@@ -96,23 +96,29 @@ var ZoteroMineruPreferences = {
 
 	saveSettings({ silent = false } = {}) {
 		this.syncTranslationMode();
+		let pending = [];
+		let invalid = (input, message) => {
+			input.setAttribute?.("aria-invalid", "true");
+			this.setStatus(message, true);
+			if (!silent) input.focus?.();
+			return false;
+		};
 		for (let field of this.FIELDS) {
 			let input = this.$(field.id);
 			if (!input) continue;
+			input.removeAttribute?.("aria-invalid");
 			let value = field.type === "bool" ? !!input.checked : input.value;
 			if (field.type === "bool") {
-				Zotero.Prefs.set(this.PREF_BRANCH + field.pref, value, true);
+				pending.push([field.pref, value]);
 				continue;
 			}
 			if (field.type === "int") {
-				let intValue = parseInt(value, 10);
-				if (!Number.isFinite(intValue) || intValue <= 0) {
-					if (!silent) {
-						this.setStatus("数值字段必须是正整数", true);
-					}
-					return;
+				let intValue = Number(value);
+				if (!/^\d+$/.test(String(value).trim()) || !Number.isSafeInteger(intValue)
+					|| intValue < field.min || intValue > field.max) {
+					return invalid(input, `${field.label}必须是 ${field.min}–${field.max} 之间的整数`);
 				}
-				Zotero.Prefs.set(this.PREF_BRANCH + field.pref, intValue, true);
+				pending.push([field.pref, intValue]);
 				continue;
 			}
 			if (["summaryRequestJSON", "translateRequestJSON"].includes(field.pref)) {
@@ -120,23 +126,23 @@ var ZoteroMineruPreferences = {
 					let fieldLabel = field.pref === "summaryRequestJSON"
 						? "总结额外 JSON 参数"
 						: "翻译额外 JSON 参数";
-					this.parseOptionalJSONObject(value, fieldLabel);
+					let params = this.parseOptionalJSONObject(value, fieldLabel);
+					this.mergeRequestPayload({}, params, ["model", "messages"]);
 				}
 				catch (e) {
-					if (!silent) {
-						this.setStatus(e.message || String(e), true);
-					}
-					return false;
+					return invalid(input, e.message || String(e));
 				}
 			}
-			if (field.pref === "apiToken") {
-				value = value.replace(/^Bearer\s+/i, "");
+			value = String(value).trim();
+			if (["apiToken", "llmApiKey"].includes(field.pref)) {
+				value = value.replace(/^Bearer\s+/i, "").trim();
 			}
-			Zotero.Prefs.set(this.PREF_BRANCH + field.pref, value.trim(), true);
+			pending.push([field.pref, value]);
 		}
-		if (!silent) {
-			this.setStatus("已保存");
+		for (let [pref, value] of pending) {
+			Zotero.Prefs.set(this.PREF_BRANCH + pref, value, true);
 		}
+		this.setStatus(silent ? "" : "已保存");
 		return true;
 	},
 
@@ -182,7 +188,7 @@ var ZoteroMineruPreferences = {
 	},
 
 	async testConnection() {
-		this.saveSettings({ silent: true });
+		if (!this.saveSettings({ silent: true })) return;
 		let settings = this.readCurrentSettings();
 		if (!settings.apiToken) {
 			this.setStatus("测试失败：Token 为空", true);

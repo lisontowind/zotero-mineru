@@ -5,7 +5,7 @@ const path = require("node:path").posix;
 const files = new Map(), prefs = new Map();
 let serial = 0, reply = "", request, erased = 0, failWrite = false;
 const context = {
-  TextDecoder, Uint8Array, atob, btoa,
+  TextDecoder, Uint8Array, atob, btoa, AbortController,
   PathUtils: { join: path.join, parent: path.dirname, tempDir: "/tmp" },
   IOUtils: {
     makeDirectory: async () => {},
@@ -15,6 +15,7 @@ const context = {
     remove: async () => {}
   },
   Zotero: {
+    Promise: { delay: async () => {} },
     Prefs: { get: k => prefs.get(k), set: (k, v) => prefs.set(k, v) },
     debug: () => {}, logError: () => {},
     Attachments: { importFromFile: async options => {
@@ -161,7 +162,7 @@ async function run() {
  const result=await m.translateChunksWithConcurrency({chunks:["A","B"],concurrency:2,autoRetryCount:1,
   translateChunk:async(text,i)=>{ if(i===0&&!run.retried){run.retried=true;throw Error("retry");}return text+" translated"; }});
  assert.equal(result.failures.length,0); assert.equal(result.successes.get(0),"A translated");
- const inputs=new Map(panel.FIELDS.map(f=>[f.id,{value:f.type==="int"?"1":"",checked:false}]));
+ const inputs=new Map(panel.FIELDS.map(f=>[f.id,{value:f.type==="int"?String(f.min):"",checked:false}]));
  panel.$=id=>inputs.get(id); inputs.set("mineru-bilingual-option",{disabled:false});
  inputs.get("mineru-translateOutputFormat").value="html";
  inputs.get("mineru-translateMode").value="bilingual"; panel.saveSettings();
@@ -189,9 +190,9 @@ async function run() {
  const originalSave=m.saveTranslationAsMarkdownAttachment;
  const sourceAttachment={getFilePath:()=>'/source.md',getField:()=> 'source'};
  files.set('/source.md',new TextEncoder().encode('A\n\nB'));
- const parent={id:1,libraryID:1,getField:()=> 'Paper'};
+ const parent={id:1,libraryID:1,getField:()=> 'Paper',addTag:()=>{},saveTx:async()=>{}};
  m.getLLMSettings=()=>({apiBaseURL:'https://test',apiKey:'test',model:'test',outputFormat:run.format||'md',translationMode:run.bilingual?'bilingual':'translation',translateChunkSize:run.chunkSize||1,translateRetryCount:1});
- m.collectTranslateTasks=()=>Array.from({length:run.taskCount||1},()=>({parentItem:parent,mineruSource:sourceAttachment}));
+ m.collectTranslateTasks=()=>Array.from({length:run.taskCount||1},(_unused,index)=>({parentItem:{...parent,id:parent.id+index},mineruSource:sourceAttachment}));
  context.Zotero.ProgressWindow=function(){this.ItemProgress=function(){this.setText=()=>{};this.setProgress=()=>{};this.setError=()=>{}};this.changeHeadline=()=>{};this.show=()=>{};this.addDescription=t=>descriptions.push(t);this.startCloseTimer=()=>{}};
  m.showAlert=(_w,_t,msg)=>alerts.push(msg);
  m.saveTranslationAsMarkdownAttachment=async args=>{saved.push(args);return originalSave.call(m,args)};
@@ -278,6 +279,21 @@ async function run() {
  m.saveSummaryAsNote=async()=>{summarySaved=true};
  await m.handleSummaryCommand();
  assert.equal(summaryInput,'# Original Markdown\n\nUnique source text.');assert(summarySaved);
+ // Long summaries cover the whole source and only save the final synthesis.
+ const fullSource='A'.repeat(60000)+'\n\nTAIL FINDING';
+ files.set('/source.md',new TextEncoder().encode(fullSource));
+ const summaryCalls=[];summarySaved=false;
+ m.callLLMForSummary=async(text,_settings,_language,stage)=>{
+  summaryCalls.push({text,stage});return stage.stage==='merge'?'Whole paper summary':'Partial research notes';
+ };
+ let finalSummary;
+ m.saveSummaryAsNote=async args=>{summarySaved=true;finalSummary=args.summaryText};
+ await m.handleSummaryCommand();
+ assert(summarySaved);assert.equal(finalSummary,'Whole paper summary');
+ assert.equal(summaryCalls.filter(c=>c.stage.stage==='chunk').map(c=>c.text).join(''),fullSource);
+ assert(summaryCalls.some(c=>c.text.includes('TAIL FINDING')));
+ summarySaved=false;m.callLLMForSummary=async()=>{throw Error('LLM output truncated')};
+ await m.handleSummaryCommand();assert.equal(summarySaved,false);
  files.delete('/source.md');summaryInput=null;summarySaved=false;
  await m.handleSummaryCommand();assert.equal(summaryInput,null);assert.equal(summarySaved,false);
  assert(alerts.at(-1).includes('原始 Markdown'));
