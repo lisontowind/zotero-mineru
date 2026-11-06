@@ -318,6 +318,56 @@ var ZoteroMineruPreferences = {
 		return { apiBaseURL, apiKey, model, summaryRequestJSON, translateRequestJSON };
 	},
 
+	buildLLMURL(apiBaseURL) {
+		let clean = String(apiBaseURL || "").trim().replace(/\/+$/, "");
+		if (!clean) return "";
+		if (/\/chat\/completions$/i.test(clean)) {
+			return clean;
+		}
+		return `${clean}/chat/completions`;
+	},
+
+	parseSSEResponse(text) {
+		let lines = String(text || "").split(/\r?\n/);
+		let fullContent = "";
+		let lastModel = "";
+		let foundAnyChunk = false;
+		for (let line of lines) {
+			line = line.trim();
+			if (!line || !line.startsWith("data:")) continue;
+			let dataStr = line.slice(5).trim();
+			if (!dataStr) continue;
+			if (dataStr === "[DONE]") {
+				foundAnyChunk = true;
+				continue;
+			}
+			try {
+				let chunk = JSON.parse(dataStr);
+				foundAnyChunk = true;
+				if (chunk.model) lastModel = chunk.model;
+				let choice = chunk.choices?.[0];
+				let delta = choice?.delta?.content ?? choice?.text ?? "";
+				if (typeof delta === "string") {
+					fullContent += delta;
+				} else if (Array.isArray(delta)) {
+					fullContent += delta.map(p => typeof p === "string" ? p : p?.text || "").join("");
+				}
+			} catch (_) {}
+		}
+		if (foundAnyChunk && fullContent.trim()) {
+			return {
+				model: lastModel,
+				choices: [
+					{
+						finish_reason: "stop",
+						message: { role: "assistant", content: fullContent.trim() }
+					}
+				]
+			};
+		}
+		return null;
+	},
+
 	async sendLLMTestRequest({ endpoint, apiKey, payload, timeoutMS = 30000 }) {
 		let controller = this.createAbortController();
 		let timeoutID = setTimeout(() => controller.abort(), timeoutMS);
@@ -334,14 +384,11 @@ var ZoteroMineruPreferences = {
 			});
 
 			let text = await response.text();
-			let json = null;
-			try {
-				json = JSON.parse(text);
-			}
-			catch (_e) {}
+			let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
+			text = String(text || "").replace(/^\uFEFF/, "").trim();
 
 			if (response.status === 401 || response.status === 403) {
-				throw new Error(this.isEnglishLocale()
+				throw new Error(isEn
 					? `API Key invalid or insufficient permissions (HTTP ${response.status})`
 					: `API Key 无效或权限不足（HTTP ${response.status}）`);
 			}
@@ -349,9 +396,36 @@ var ZoteroMineruPreferences = {
 				throw new Error(`HTTP ${response.status}: ${text.slice(0, 500)}`);
 			}
 
-			let reply = json?.choices?.[0]?.message?.content || "";
+			if (text.startsWith("<") || /<html|<!DOCTYPE/i.test(text)) {
+				let preview = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+				throw new Error(isEn
+					? `LLM API returned HTML instead of JSON: ${preview || "HTML response"}. Please check API Base URL.`
+					: `LLM API 返回了 HTML 网页而非 JSON 数据：${preview || "HTML 页面"}。请检查 Base URL 是否正确。`);
+			}
+
+			let json = null;
+			try {
+				json = JSON.parse(text);
+			}
+			catch (_e) {
+				let fenceMatch = text.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i);
+				if (fenceMatch) {
+					try { json = JSON.parse(fenceMatch[1].trim()); } catch (_) {}
+				}
+				if (!json && typeof this.parseSSEResponse === "function") {
+					json = this.parseSSEResponse(text);
+				}
+			}
+
+			let reply = json?.choices?.[0]?.message?.content
+				|| json?.choices?.[0]?.text
+				|| json?.response
+				|| "";
+			if (typeof reply === "string") {
+				reply = reply.replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+			}
 			if (!reply) {
-				throw new Error(this.isEnglishLocale() ? "LLM did not return a valid response" : "LLM 未返回有效回复");
+				throw new Error(isEn ? "LLM did not return a valid response" : "LLM 未返回有效回复");
 			}
 
 			return {
@@ -362,7 +436,8 @@ var ZoteroMineruPreferences = {
 		}
 		catch (e) {
 			if (e?.name === "AbortError") {
-				throw new Error(this.isEnglishLocale()
+				let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
+				throw new Error(isEn
 					? `Request timed out (${Math.round(timeoutMS / 1000)}s)`
 					: `请求超时（${Math.round(timeoutMS / 1000)}秒）`);
 			}
@@ -376,23 +451,24 @@ var ZoteroMineruPreferences = {
 	async testLLMConnection() {
 		if (!this.saveSettings()) return;
 		let llm = this.readLLMSettings();
+		let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
 		if (!llm.apiBaseURL || !llm.apiKey || !llm.model) {
-			this.setStatus(this.isEnglishLocale() ? "Test failed: Incomplete LLM settings" : "测试失败：LLM 设置不完整", true);
-			this.setOutput(this.isEnglishLocale()
+			this.setStatus(isEn ? "Test failed: Incomplete LLM settings" : "测试失败：LLM 设置不完整", true);
+			this.setOutput(isEn
 				? "Please enter LLM API Base URL, API Key, and Model Name first."
 				: "请先填写 LLM API Base URL、API Key 和模型名称。");
 			return;
 		}
 
-		let endpoint = llm.apiBaseURL + "/chat/completions";
+		let endpoint = this.buildLLMURL(llm.apiBaseURL);
 		try {
 			let summaryRequestParams = this.parseOptionalJSONObject(
 				llm.summaryRequestJSON,
-				this.isEnglishLocale() ? "Summary extra JSON parameters" : "总结额外 JSON 参数"
+				isEn ? "Summary extra JSON parameters" : "总结额外 JSON 参数"
 			);
 			let translateRequestParams = this.parseOptionalJSONObject(
 				llm.translateRequestJSON,
-				this.isEnglishLocale() ? "Translation extra JSON parameters" : "翻译额外 JSON 参数"
+				isEn ? "Translation extra JSON parameters" : "翻译额外 JSON 参数"
 			);
 			let testCases = [
 				{
@@ -405,7 +481,8 @@ var ZoteroMineruPreferences = {
 							{ role: "system", content: "You are testing the current summary request configuration. Reply with exactly OK." },
 							{ role: "user", content: "Return exactly OK." }
 						],
-						max_tokens: 16
+						max_tokens: 16,
+						stream: false
 					}
 				},
 				{
@@ -418,7 +495,8 @@ var ZoteroMineruPreferences = {
 							{ role: "system", content: "You are testing the current translation request configuration. Reply with exactly OK." },
 							{ role: "user", content: "Return exactly OK." }
 						],
-						max_tokens: 16
+						max_tokens: 16,
+						stream: false
 					}
 				}
 			];

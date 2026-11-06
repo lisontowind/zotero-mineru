@@ -257,3 +257,104 @@ test('hierarchical summaries reduce oversized intermediate notes and stop non-co
   m.callLLMForSummary = async text => text;
   await assert.rejects(m.summarizeFullDocument('A'.repeat(61000), settings, '中文'), /未能缩短/);
 });
+
+test('buildLLMURL normalizes trailing slashes and prevents duplicate /chat/completions', () => {
+  const { m } = harness();
+  assert.equal(m.buildLLMURL('https://api.openai.com/v1'), 'https://api.openai.com/v1/chat/completions');
+  assert.equal(m.buildLLMURL('https://api.openai.com/v1/'), 'https://api.openai.com/v1/chat/completions');
+  assert.equal(m.buildLLMURL('https://api.openai.com/v1/chat/completions'), 'https://api.openai.com/v1/chat/completions');
+  assert.equal(m.buildLLMURL('https://api.openai.com/v1/chat/completions/'), 'https://api.openai.com/v1/chat/completions');
+  assert.equal(m.buildLLMURL(''), '');
+});
+
+test('callLLMForSummary succeeds when LLM API returns SSE stream (data: ...)', async () => {
+  const sseBody = [
+    'data: {"id":"1","choices":[{"delta":{"content":"# Summary\\n"}}]}',
+    'data: {"id":"2","choices":[{"delta":{"content":"Key findings here."}}]}',
+    'data: [DONE]'
+  ].join('\n\n');
+  const { m, requests } = harness(async () => response(200, sseBody));
+  const res = await m.callLLMForSummary('Platonic solids paper', settings, 'en');
+  assert.equal(res, '# Summary\nKey findings here.');
+  assert.equal(requests.length, 1);
+  const sentPayload = JSON.parse(requests[0].body);
+  assert.equal(sentPayload.stream, false);
+  const acceptHeader = requests[0].headers?.get?.('Accept') || requests[0].headers?.['Accept'];
+  assert.equal(acceptHeader, 'application/json');
+});
+
+test('callLLMForSummary succeeds when response has UTF-8 BOM or markdown code fence', async () => {
+  const jsonText = JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: 'Clean summary' } }] });
+  // BOM test
+  const { m: mBom } = harness(async () => response(200, '\uFEFF' + jsonText));
+  assert.equal(await mBom.callLLMForSummary('Paper', settings, 'en'), 'Clean summary');
+
+  // Code fence test
+  const { m: mFence } = harness(async () => response(200, '```json\n' + jsonText + '\n```'));
+  assert.equal(await mFence.callLLMForSummary('Paper', settings, 'en'), 'Clean summary');
+});
+
+test('callLLMForSummary handles Gemini STOP, Anthropic end_turn, and strips DeepSeek <think> tags', async () => {
+  // Case-insensitive STOP
+  const { m: mStop } = harness(async () => response(200, { choices: [{ finish_reason: 'STOP', message: { content: 'Gemini reply' } }] }));
+  assert.equal(await mStop.callLLMForSummary('Paper', settings, 'en'), 'Gemini reply');
+
+  // Anthropic end_turn
+  const { m: mEndTurn } = harness(async () => response(200, { choices: [{ finish_reason: 'end_turn', message: { content: 'Claude reply' } }] }));
+  assert.equal(await mEndTurn.callLLMForSummary('Paper', settings, 'en'), 'Claude reply');
+
+  // DeepSeek-R1 <think> tags
+  const { m: mThink } = harness(async () => response(200, {
+    choices: [{ finish_reason: 'stop', message: { content: '<think>Let me reason about platonic solids...\n</think>\n\nFinal structured summary.' } }]
+  }));
+  assert.equal(await mThink.callLLMForSummary('Platonic solids', settings, 'en'), 'Final structured summary.');
+});
+
+test('callLLMForSummary throws informative error when server returns HTML instead of raw SyntaxError', async () => {
+  const htmlBody = '<!DOCTYPE html><html><head><title>Cloudflare</title></head><body>Just a moment...</body></html>';
+  const { m } = harness(async () => response(200, htmlBody));
+  await assert.rejects(
+    m.callLLMForSummary('Paper', settings, 'en'),
+    /HTML/
+  );
+});
+
+test('callLLMForSummary throws informative error when server returns invalid JSON instead of unhandled SyntaxError', async () => {
+  const badBody = 'Service unavailable or unexpected plain text';
+  const { m } = harness(async () => response(200, badBody));
+  await assert.rejects(
+    m.callLLMForSummary('Paper', settings, 'en'),
+    /JSON/
+  );
+});
+
+test('callLLMForTranslation succeeds with SSE stream, BOM, and conversational JSON array wrapping', async () => {
+  // SSE stream translation
+  const sseBody = [
+    'data: {"id":"1","choices":[{"delta":{"content":"# 译文\\n"}}]}',
+    'data: {"id":"2","choices":[{"delta":{"content":"主要发现如下。"}}]}',
+    'data: [DONE]'
+  ].join('\n\n');
+  const { m: mSse, requests } = harness(async () => response(200, sseBody));
+  const res = await mSse.callLLMForTranslation('Source markdown', '中文', settings, 1, 1);
+  assert.equal(res, '# 译文\n主要发现如下。');
+  const sentPayload = JSON.parse(requests[0].body);
+  assert.equal(sentPayload.stream, false);
+
+  // Batch translation with conversational text wrapping JSON array
+  const imageMarker = 'zotero-mineru-image://img-1';
+  const textWithImage = `Paragraph 1\n\n![Figure](${imageMarker})\n\nParagraph 2`;
+  const chattyReply = 'Here is the translated JSON:\n```json\n["第一段", "第二段"]\n```\nHope this helps!';
+  const { m: mBatch } = harness(async () => response(200, { choices: [{ finish_reason: 'stop', message: { content: chattyReply } }] }));
+  const batchRes = await mBatch.callLLMForTranslation(textWithImage, '中文', settings, 1, 1);
+  assert(batchRes.includes('第一段'));
+  assert(batchRes.includes('第二段'));
+  assert(batchRes.includes(imageMarker));
+
+  // HTML response throws informative error
+  const { m: mHtml } = harness(async () => response(200, '<html><head><title>Error</title></head><body>502 Bad Gateway</body></html>'));
+  await assert.rejects(
+    mHtml.callLLMForTranslation('Source', '中文', settings, 1, 1),
+    /HTML/
+  );
+});
