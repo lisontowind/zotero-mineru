@@ -293,6 +293,8 @@ preferences.xhtml 分两个区域：MinerU 设置 + LLM 设置，Grid 布局（1
 
 设置及主要运行界面按 Zotero 语言切换中文或英文，非中文环境使用英文。设置文字通过 en-US / zh-CN Fluent 资源加载，并保留 JavaScript 英文回退；FTL 中的字面量 {{language}} 必须写成 `{ "{{language}}" }`，不能被解释为消息引用。总结和翻译语言菜单包含 Tiếng Việt。
 
+设置片段的本地化链接必须使用 HTML 命名空间的 `html:link rel="localization"`。根节点是 XUL vbox，未加前缀的 link 不会注册 Fluent 资源，会导致首次打开时 document.l10n.translateFragment() 报错；不能只依赖 init() 后补加载资源。
+
 模型版本、总结语言和翻译目标语言使用带 `native="true"` 的 XUL `menulist`，并通过 `command` 事件保存。不要改回嵌入式 HTML `select`，否则在 Zotero 偏好面板中可能出现下拉菜单偶发无法弹出的问题。
 
 三个按钮：
