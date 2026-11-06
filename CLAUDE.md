@@ -80,6 +80,7 @@ Windows 缺少 Bash / bsdtar 时，可用 Python `zipfile` 按 `build-xpi.sh` �
 - 真正触发 GitHub Release 和 XPI 上传的是 `v*` tag，不是 `main` 分支提交
 - 发布时提交实际运行代码、设置、说明、测试和 vendor 依赖；不要把临时修复 HTML、下载的依赖压缩包等实验产物顺带提交
 - `updates.json` 的版本及 Zotero 兼容范围应与 manifest 一致；工作流会使用固定资产名 `zotero-mineru.xpi`
+- 如果 Actions 因账户计费或 runner 基础设施问题无法启动，可从已推送的发布 tag 导出源码，按 FILES 清单本地构建并逐文件校验，手动创建正式 Release 并上传 `zotero-mineru.xpi`，随后更新并提交 `updates.json` 到 main。确认 latest Release、下载资产和更新元数据均为目标版本；保留发布 tag，明确记录本次采用手动发布及 CI 失败原因。
 
 ## 架构要点
 
