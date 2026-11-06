@@ -2551,18 +2551,134 @@ ZoteroMineru = {
 		await Zotero.Promise.delay(delay);
 	},
 
+	buildLLMURL(apiBaseURL) {
+		let clean = String(apiBaseURL || "").trim().replace(/\/+$/, "");
+		if (!clean) return "";
+		if (/\/chat\/completions$/i.test(clean)) {
+			return clean;
+		}
+		return `${clean}/chat/completions`;
+	},
+
+	parseSSEResponse(text) {
+		let lines = String(text || "").split(/\r?\n/);
+		let fullContent = "";
+		let lastModel = "";
+		let lastFinishReason = "stop";
+		let foundAnyChunk = false;
+		for (let line of lines) {
+			line = line.trim();
+			if (!line || !line.startsWith("data:")) continue;
+			let dataStr = line.slice(5).trim();
+			if (!dataStr) continue;
+			if (dataStr === "[DONE]") {
+				foundAnyChunk = true;
+				continue;
+			}
+			try {
+				let chunk = JSON.parse(dataStr);
+				foundAnyChunk = true;
+				if (chunk.model) lastModel = chunk.model;
+				let choice = chunk.choices?.[0];
+				if (choice?.finish_reason) lastFinishReason = choice.finish_reason;
+				let delta = choice?.delta?.content ?? choice?.text ?? "";
+				if (typeof delta === "string") {
+					fullContent += delta;
+				} else if (Array.isArray(delta)) {
+					fullContent += delta.map(p => typeof p === "string" ? p : p?.text || "").join("");
+				}
+			} catch (_) {}
+		}
+		if (foundAnyChunk && fullContent.trim()) {
+			return {
+				model: lastModel,
+				choices: [
+					{
+						finish_reason: lastFinishReason,
+						message: { role: "assistant", content: fullContent.trim() }
+					}
+				]
+			};
+		}
+		return null;
+	},
+
+	parseLLMResponseText(rawText, responseStatus = 200) {
+		let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
+		let text = String(rawText ?? "").replace(/^\uFEFF/, "").trim();
+		if (!text) {
+			throw new Error(isEn
+				? `LLM API returned an empty response (HTTP ${responseStatus})`
+				: `LLM API 返回了空响应（HTTP ${responseStatus}）`);
+		}
+
+		// 1. Try parsing directly as JSON
+		try {
+			return JSON.parse(text);
+		} catch (_e) {}
+
+		// 2. Try unwrapping markdown code fences (```json ... ```)
+		let fenceMatch = text.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i);
+		if (fenceMatch) {
+			try {
+				return JSON.parse(fenceMatch[1].trim());
+			} catch (_) {}
+		}
+
+		// 3. Try parsing as Server-Sent Events (SSE: data: {...})
+		let sseResult = this.parseSSEResponse(text);
+		if (sseResult) {
+			return sseResult;
+		}
+
+		// 4. Check if response is HTML
+		if (text.startsWith("<") || /<html|<!DOCTYPE/i.test(text)) {
+			let preview = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+			throw new Error(isEn
+				? `LLM API returned an HTML page instead of JSON (HTTP ${responseStatus}): ${preview || "HTML response"}. Please check your LLM API Base URL.`
+				: `LLM API 返回了 HTML 网页而非 JSON 数据（HTTP ${responseStatus}）：${preview || "HTML 页面"}。请检查 LLM API Base URL 是否正确。`);
+		}
+
+		// 5. Plain text or malformed JSON
+		let preview = text.replace(/\s+/g, " ").trim().slice(0, 200);
+		throw new Error(isEn
+			? `LLM API returned invalid JSON (HTTP ${responseStatus}): ${preview}`
+			: `LLM API 返回的不是有效 JSON（HTTP ${responseStatus}）：${preview}`);
+	},
+
 	getLLMResponseContent(result) {
 		let choice = result?.choices?.[0];
 		let reason = choice?.finish_reason;
-		if (reason && reason !== "stop") {
-			let error = new Error(reason === "length"
-				? "LLM 输出被截断，未保存为完整结果。请减小翻译分段或调整模型输出上限后重试。"
-				: `LLM 未完整完成回复（${reason}），未保存为完整结果。`);
+		let normReason = String(reason || "").toLowerCase();
+		let isComplete = !reason || normReason === "stop" || normReason === "end_turn" || normReason === "stop_sequence";
+		if (!isComplete) {
+			let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
+			let error = new Error(normReason === "length"
+				? (isEn ? "LLM output was truncated. Please adjust max tokens." : "LLM 输出被截断，未保存为完整结果。请减小翻译分段或调整模型输出上限后重试。")
+				: (isEn ? `LLM response incomplete (${reason}).` : `LLM 未完整完成回复（${reason}），未保存为完整结果。`));
 			error.code = "LLM_INCOMPLETE";
 			throw error;
 		}
 		let content = choice?.message?.content;
-		if (typeof content !== "string" || !content.trim()) throw new Error("LLM 返回内容为空或格式无效");
+		if (Array.isArray(content)) {
+			content = content.map(part => typeof part === "string" ? part : part?.text || "").join("");
+		}
+		if (typeof content !== "string" || !content.trim()) {
+			if (typeof choice?.text === "string" && choice.text.trim()) {
+				content = choice.text;
+			} else if (typeof result?.response === "string" && result.response.trim()) {
+				content = result.response;
+			} else if (typeof result?.candidates?.[0]?.content?.parts?.[0]?.text === "string") {
+				content = result.candidates[0].content.parts[0].text;
+			}
+		}
+		if (typeof content === "string") {
+			content = content.replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+		}
+		if (typeof content !== "string" || !content.trim()) {
+			let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
+			throw new Error(isEn ? "LLM returned empty or invalid response" : "LLM 返回内容为空或格式无效");
+		}
 		return content.trim();
 	},
 
@@ -3207,7 +3323,7 @@ ZoteroMineru = {
 	},
 
 	async callLLMForSummary(plainText, llmSettings, language, context = {}) {
-		let url = `${llmSettings.apiBaseURL}/chat/completions`;
+		let url = this.buildLLMURL(llmSettings.apiBaseURL);
 		language = language || "中文";
 		let systemPrompt;
 		let customPrompt = (llmSettings.summaryPrompt || "").trim();
@@ -3268,7 +3384,8 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 				{ role: "system", content: systemPrompt },
 				{ role: "user", content: userMessage }
 			],
-			temperature: 0.3
+			temperature: 0.3,
+			stream: false
 		};
 		payload = this.mergeRequestPayload(
 			payload,
@@ -3280,6 +3397,7 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 			let response = await fetch(url, {
 				method: "POST",
 				headers: {
+					"Accept": "application/json",
 					"Content-Type": "application/json",
 					"Authorization": `Bearer ${llmSettings.apiKey}`
 				},
@@ -3288,11 +3406,24 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 			});
 
 			if (!response.ok) {
-				let errText = await response.text();
+				let errText = typeof response.text === "function" ? await response.text() : "";
 				throw this.createHTTPError(response, errText, "LLM API 请求失败");
 			}
 
-			let result = await response.json();
+			let result;
+			if (typeof response.text === "function") {
+				let rawText = await response.text();
+				result = this.parseLLMResponseText(rawText, response.status);
+			} else if (typeof response.json === "function") {
+				try {
+					result = await response.json();
+				} catch (e) {
+					let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
+					throw new Error(isEn ? `LLM API returned invalid JSON: ${e.message || e}` : `LLM API 返回的不是有效 JSON：${e.message || e}`);
+				}
+			} else {
+				throw new Error("Invalid response object");
+			}
 			return this.getLLMResponseContent(result);
 		};
 
@@ -3663,7 +3794,7 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 		if (/data:[^\s<>]*;base64,|zotero-mineru-image:\/\//i.test(requestText)) {
 			throw new Error("图片未能隔离，已阻止发送翻译请求");
 		}
-		let url = `${llmSettings.apiBaseURL}/chat/completions`
+		let url = this.buildLLMURL(llmSettings.apiBaseURL);
 
 		let chunkHint = totalChunks > 1
 			? `\n\nNote: This is part ${chunkIndex} of ${totalChunks}. Translate only this part, maintaining continuity.`
@@ -3688,7 +3819,8 @@ Rules:
 				{ role: "system", content: systemPrompt },
 				{ role: "user", content: requestText }
 			],
-			temperature: 0.3
+			temperature: 0.3,
+			stream: false
 		}
 		payload = this.mergeRequestPayload(
 			payload,
@@ -3700,6 +3832,7 @@ Rules:
 			let response = await fetch(url, {
 				method: "POST",
 				headers: {
+					"Accept": "application/json",
 					"Content-Type": "application/json",
 					"Authorization": `Bearer ${llmSettings.apiKey}`
 				},
@@ -3708,16 +3841,35 @@ Rules:
 			})
 
 			if (!response.ok) {
-				let errText = await response.text()
+				let errText = typeof response.text === "function" ? await response.text() : "";
 				throw this.createHTTPError(response, errText, "LLM API 请求失败")
 			}
 
-			let result = await response.json()
+			let result;
+			if (typeof response.text === "function") {
+				let rawText = await response.text();
+				result = this.parseLLMResponseText(rawText, response.status);
+			} else if (typeof response.json === "function") {
+				try {
+					result = await response.json();
+				} catch (e) {
+					let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
+					throw new Error(isEn ? `LLM API returned invalid JSON: ${e.message || e}` : `LLM API 返回的不是有效 JSON：${e.message || e}`);
+				}
+			} else {
+				throw new Error("Invalid response object");
+			}
 			let content = this.getLLMResponseContent(result)
 			if (/data:[^\s<>]*;base64,|zotero-mineru-image:\/\//i.test(content)) throw new Error("翻译返回了图片数据或标识，正文不应包含图片");
 			if (!batch) return content.trim();
 			let translated;
-			try { translated = JSON.parse(content.trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i, "$1")); }
+			try {
+				let cleanContent = content.trim();
+				let codeMatch = cleanContent.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
+				let jsonCandidate = codeMatch ? codeMatch[1].trim() : cleanContent;
+				let arrayMatch = jsonCandidate.match(/\[\s*[\s\S]*\s*\]/);
+				translated = JSON.parse(arrayMatch ? arrayMatch[0] : jsonCandidate);
+			}
 			catch (e) { throw new Error("翻译文字分片返回格式无效，请重试"); }
 			if (!Array.isArray(translated) || translated.length !== prepared.texts.length ||
 				translated.some(value => typeof value !== "string" || !value.trim())) {
