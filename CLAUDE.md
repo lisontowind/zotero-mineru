@@ -1,6 +1,6 @@
 # Zotero MinerU Plugin
 
-Zotero 8/9/10 插件，调用 MinerU 官方 API 解析 PDF，始终保存原始 Markdown，并支持可选 HTML、Markdown 转笔记、LLM 总结和翻译。当前开发分支基于 v0.1.71，包含英文界面与 LLM 响应兼容改进；版本号以 manifest.json 为准。
+Zotero 8/9/10 插件，调用 MinerU 官方 API 解析 PDF，始终保存原始 Markdown，并支持可选 HTML、Markdown 转笔记、LLM 总结和翻译。本文描述 v0.1.72 的实现，包含英文界面与 LLM 响应兼容改进；版本号以 manifest.json 为准。
 
 ## 项目结构
 
