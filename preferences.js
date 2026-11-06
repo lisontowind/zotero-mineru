@@ -12,8 +12,8 @@ var ZoteroMineruPreferences = {
 		{ id: "mineru-api-token", pref: "apiToken", type: "string" },
 		{ id: "mineru-model-version", pref: "modelVersion", type: "string" },
 		{ id: "mineru-note-include-images", pref: "noteIncludeImages", type: "bool" },
-		{ id: "mineru-poll-interval-sec", pref: "pollIntervalSec", type: "int", min: 1, max: 60, label: "轮询间隔" },
-		{ id: "mineru-timeout-sec", pref: "timeoutSec", type: "int", min: 5, max: 3600, label: "请求超时" },
+		{ id: "mineru-poll-interval-sec", pref: "pollIntervalSec", type: "int", min: 1, max: 60, label: "轮询间隔", labelEn: "Polling interval" },
+		{ id: "mineru-timeout-sec", pref: "timeoutSec", type: "int", min: 5, max: 3600, label: "请求超时", labelEn: "Request timeout" },
 		{ id: "mineru-note-title-prefix", pref: "noteTitlePrefix", type: "string" },
 		{ id: "mineru-llm-api-base-url", pref: "llmApiBaseURL", type: "string" },
 		{ id: "mineru-llm-api-key", pref: "llmApiKey", type: "string" },
@@ -22,9 +22,9 @@ var ZoteroMineruPreferences = {
 		{ id: "mineru-summary-prompt", pref: "summaryPrompt", type: "string" },
 		{ id: "mineru-summary-request-json", pref: "summaryRequestJSON", type: "string" },
 		{ id: "mineru-translate-language", pref: "translateLanguage", type: "string" },
-		{ id: "mineru-translate-chunk-size", pref: "translateChunkSize", type: "int", min: 5000, max: 60000, label: "翻译分段字符数" },
-		{ id: "mineru-translate-concurrency", pref: "translateConcurrency", type: "int", min: 1, max: 8, label: "翻译并发请求数" },
-		{ id: "mineru-translate-retry-count", pref: "translateRetryCount", type: "int", min: 1, max: 5, label: "翻译自动重试次数" },
+		{ id: "mineru-translate-chunk-size", pref: "translateChunkSize", type: "int", min: 5000, max: 60000, label: "翻译分段字符数", labelEn: "Translation chunk size" },
+		{ id: "mineru-translate-concurrency", pref: "translateConcurrency", type: "int", min: 1, max: 8, label: "翻译并发请求数", labelEn: "Translation concurrency" },
+		{ id: "mineru-translate-retry-count", pref: "translateRetryCount", type: "int", min: 1, max: 5, label: "翻译自动重试次数", labelEn: "Translation auto-retry count" },
 		{ id: "mineru-translate-request-json", pref: "translateRequestJSON", type: "string" }
 	],
 
@@ -77,10 +77,16 @@ var ZoteroMineruPreferences = {
 			parsed = JSON.parse(normalized);
 		}
 		catch (e) {
-			throw new Error(`${fieldLabel} 不是合法 JSON：${e.message || e}`);
+			let msg = this.isEnglishLocale()
+				? `${fieldLabel} is not valid JSON: ${e.message || e}`
+				: `${fieldLabel} 不是合法 JSON：${e.message || e}`;
+			throw new Error(msg);
 		}
 		if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-			throw new Error(`${fieldLabel} 必须是 JSON 对象`);
+			let msg = this.isEnglishLocale()
+				? `${fieldLabel} must be a JSON object`
+				: `${fieldLabel} 必须是 JSON 对象`;
+			throw new Error(msg);
 		}
 		return parsed;
 	},
@@ -92,7 +98,10 @@ var ZoteroMineruPreferences = {
 		}
 		for (let [key, value] of Object.entries(extraPayload)) {
 			if (reservedKeys.includes(key)) {
-				throw new Error(`额外 JSON 参数不能覆盖保留字段：${reservedKeys.join(", ")}`);
+				let msg = this.isEnglishLocale()
+					? `Extra JSON parameters cannot override reserved fields: ${reservedKeys.join(", ")}`
+					: `额外 JSON 参数不能覆盖保留字段：${reservedKeys.join(", ")}`;
+				throw new Error(msg);
 			}
 			mergedPayload[key] = value;
 		}
@@ -140,7 +149,11 @@ var ZoteroMineruPreferences = {
 				let intValue = Number(value);
 				if (!/^\d+$/.test(String(value).trim()) || !Number.isSafeInteger(intValue)
 					|| intValue < field.min || intValue > field.max) {
-					return invalid(input, `${field.label}必须是 ${field.min}–${field.max} 之间的整数`);
+					let fieldLabel = this.isEnglishLocale() && field.labelEn ? field.labelEn : field.label;
+					let msg = this.isEnglishLocale()
+						? `${fieldLabel} must be an integer between ${field.min} and ${field.max}`
+						: `${fieldLabel}必须是 ${field.min}–${field.max} 之间的整数`;
+					return invalid(input, msg);
 				}
 				pending.push([field.pref, intValue]);
 				continue;
@@ -148,8 +161,8 @@ var ZoteroMineruPreferences = {
 			if (["summaryRequestJSON", "translateRequestJSON"].includes(field.pref)) {
 				try {
 					let fieldLabel = field.pref === "summaryRequestJSON"
-						? "总结额外 JSON 参数"
-						: "翻译额外 JSON 参数";
+						? (this.isEnglishLocale() ? "Summary extra JSON parameters" : "总结额外 JSON 参数")
+						: (this.isEnglishLocale() ? "Translation extra JSON parameters" : "翻译额外 JSON 参数");
 					let params = this.parseOptionalJSONObject(value, fieldLabel);
 					this.mergeRequestPayload({}, params, ["model", "messages"]);
 				}
@@ -166,7 +179,7 @@ var ZoteroMineruPreferences = {
 		for (let [pref, value] of pending) {
 			Zotero.Prefs.set(this.PREF_BRANCH + pref, value, true);
 		}
-		this.setStatus(silent ? "" : "已保存");
+		this.setStatus(silent ? "" : (this.isEnglishLocale() ? "Saved" : "已保存"));
 		return true;
 	},
 
@@ -215,8 +228,8 @@ var ZoteroMineruPreferences = {
 		if (!this.saveSettings({ silent: true })) return;
 		let settings = this.readCurrentSettings();
 		if (!settings.apiToken) {
-			this.setStatus("测试失败：Token 为空", true);
-			this.setOutput("请先填写 API Token。");
+			this.setStatus(this.isEnglishLocale() ? "Test failed: Token is empty" : "测试失败：Token 为空", true);
+			this.setOutput(this.isEnglishLocale() ? "Please enter API Token first." : "请先填写 API Token。");
 			return;
 		}
 
@@ -234,8 +247,8 @@ var ZoteroMineruPreferences = {
 		let controller = this.createAbortController();
 		let timeoutID = setTimeout(() => controller.abort(), settings.timeoutMS);
 		try {
-			this.setStatus("正在测试 MinerU 连接...");
-			this.setOutput(`POST ${endpoint}\nToken长度: ${settings.apiToken.length}`);
+			this.setStatus(this.isEnglishLocale() ? "Testing MinerU connection..." : "正在测试 MinerU 连接...");
+			this.setOutput(`POST ${endpoint}\n${this.isEnglishLocale() ? "Token length" : "Token长度"}: ${settings.apiToken.length}`);
 
 			let response = await fetch(endpoint, {
 				method: "POST",
@@ -256,18 +269,18 @@ var ZoteroMineruPreferences = {
 			catch (_e) {}
 
 			if (response.status === 401 || response.status === 403) {
-				this.setStatus("测试失败：Token 无效或权限不足", true);
+				this.setStatus(this.isEnglishLocale() ? "Test failed: Token invalid or insufficient permissions" : "测试失败：Token 无效或权限不足", true);
 				this.setOutput(`HTTP ${response.status}\n${text.slice(0, 1200)}`);
 				return;
 			}
 			if (!response.ok) {
-				this.setStatus(`测试失败：HTTP ${response.status}`, true);
+				this.setStatus(this.isEnglishLocale() ? `Test failed: HTTP ${response.status}` : `测试失败：HTTP ${response.status}`, true);
 				this.setOutput(text.slice(0, 1200));
 				return;
 			}
 
 			if (json && json.code === 0) {
-				this.setStatus("MinerU 连接成功：Token 可用");
+				this.setStatus(this.isEnglishLocale() ? "MinerU connection successful: Token is valid" : "MinerU 连接成功：Token 可用");
 				this.setOutput(JSON.stringify({
 					endpoint,
 					code: json.code,
@@ -277,12 +290,16 @@ var ZoteroMineruPreferences = {
 				return;
 			}
 
-			this.setStatus("已连通，但接口返回业务错误", true);
+			this.setStatus(this.isEnglishLocale() ? "Connected, but API returned business error" : "已连通，但接口返回业务错误", true);
 			this.setOutput((json ? JSON.stringify(json, null, 2) : text).slice(0, 1200));
 		}
 		catch (e) {
-			let msg = e?.name === "AbortError" ? "请求超时" : (e.message || String(e));
-			this.setStatus("测试失败：" + msg, true);
+			let isTimeout = e?.name === "AbortError";
+			let msg = isTimeout
+				? (this.isEnglishLocale() ? "Request timed out" : "请求超时")
+				: (e.message || String(e));
+			let prefix = this.isEnglishLocale() ? "Test failed: " : "测试失败：";
+			this.setStatus(prefix + msg, true);
 			this.setOutput(msg);
 		}
 		finally {
@@ -324,7 +341,9 @@ var ZoteroMineruPreferences = {
 			catch (_e) {}
 
 			if (response.status === 401 || response.status === 403) {
-				throw new Error(`API Key 无效或权限不足（HTTP ${response.status}）`);
+				throw new Error(this.isEnglishLocale()
+					? `API Key invalid or insufficient permissions (HTTP ${response.status})`
+					: `API Key 无效或权限不足（HTTP ${response.status}）`);
 			}
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status}: ${text.slice(0, 500)}`);
@@ -332,7 +351,7 @@ var ZoteroMineruPreferences = {
 
 			let reply = json?.choices?.[0]?.message?.content || "";
 			if (!reply) {
-				throw new Error("LLM 未返回有效回复");
+				throw new Error(this.isEnglishLocale() ? "LLM did not return a valid response" : "LLM 未返回有效回复");
 			}
 
 			return {
@@ -343,7 +362,9 @@ var ZoteroMineruPreferences = {
 		}
 		catch (e) {
 			if (e?.name === "AbortError") {
-				throw new Error(`请求超时（${Math.round(timeoutMS / 1000)}秒）`);
+				throw new Error(this.isEnglishLocale()
+					? `Request timed out (${Math.round(timeoutMS / 1000)}s)`
+					: `请求超时（${Math.round(timeoutMS / 1000)}秒）`);
 			}
 			throw e;
 		}
@@ -356,15 +377,23 @@ var ZoteroMineruPreferences = {
 		if (!this.saveSettings()) return;
 		let llm = this.readLLMSettings();
 		if (!llm.apiBaseURL || !llm.apiKey || !llm.model) {
-			this.setStatus("测试失败：LLM 设置不完整", true);
-			this.setOutput("请先填写 LLM API Base URL、API Key 和模型名称。");
+			this.setStatus(this.isEnglishLocale() ? "Test failed: Incomplete LLM settings" : "测试失败：LLM 设置不完整", true);
+			this.setOutput(this.isEnglishLocale()
+				? "Please enter LLM API Base URL, API Key, and Model Name first."
+				: "请先填写 LLM API Base URL、API Key 和模型名称。");
 			return;
 		}
 
 		let endpoint = llm.apiBaseURL + "/chat/completions";
 		try {
-			let summaryRequestParams = this.parseOptionalJSONObject(llm.summaryRequestJSON, "总结额外 JSON 参数");
-			let translateRequestParams = this.parseOptionalJSONObject(llm.translateRequestJSON, "翻译额外 JSON 参数");
+			let summaryRequestParams = this.parseOptionalJSONObject(
+				llm.summaryRequestJSON,
+				this.isEnglishLocale() ? "Summary extra JSON parameters" : "总结额外 JSON 参数"
+			);
+			let translateRequestParams = this.parseOptionalJSONObject(
+				llm.translateRequestJSON,
+				this.isEnglishLocale() ? "Translation extra JSON parameters" : "翻译额外 JSON 参数"
+			);
 			let testCases = [
 				{
 					label: "summary",
@@ -394,7 +423,7 @@ var ZoteroMineruPreferences = {
 				}
 			];
 
-			this.setStatus("正在测试当前 LLM 配置...");
+			this.setStatus(this.isEnglishLocale() ? "Testing current LLM configuration..." : "正在测试当前 LLM 配置...");
 			this.setOutput(JSON.stringify({
 				endpoint,
 				model: llm.model,
@@ -438,7 +467,7 @@ var ZoteroMineruPreferences = {
 			}
 
 			if (failures.length) {
-				this.setStatus("当前 LLM 配置测试失败", true);
+				this.setStatus(this.isEnglishLocale() ? "Current LLM configuration test failed" : "当前 LLM 配置测试失败", true);
 				this.setOutput(JSON.stringify({
 					endpoint,
 					model: llm.model,
@@ -448,7 +477,7 @@ var ZoteroMineruPreferences = {
 				return;
 			}
 
-			this.setStatus("当前 LLM 配置测试成功");
+			this.setStatus(this.isEnglishLocale() ? "Current LLM configuration test succeeded" : "当前 LLM 配置测试成功");
 			this.setOutput(JSON.stringify({
 				endpoint,
 				model: llm.model,
@@ -457,14 +486,89 @@ var ZoteroMineruPreferences = {
 		}
 		catch (e) {
 			let msg = e.message || String(e);
-			this.setStatus("LLM 测试失败：" + msg, true);
+			let prefix = this.isEnglishLocale() ? "LLM test failed: " : "LLM 测试失败：";
+			this.setStatus(prefix + msg, true);
 			this.setOutput(msg);
+		}
+	},
+
+	isEnglishLocale() {
+		try {
+			let loc = (typeof Zotero !== "undefined" && Zotero.locale)
+				|| (typeof Services !== "undefined" && Services.locale?.appLocaleAsBCP47)
+				|| "";
+			if (!loc) return false;
+			return !loc.toLowerCase().startsWith("zh");
+		} catch (_) {
+			return false;
+		}
+	},
+
+	applyLocalization() {
+		if (!this.isEnglishLocale()) return;
+		const dict = {
+			"mineru-pref-title": "MinerU PDF Parsing Settings",
+			"mineru-pref-api-base-url": "API Base URL",
+			"mineru-pref-api-token": "API Token",
+			"mineru-pref-api-token-input": { placeholder: "Token generated from MinerU console" },
+			"mineru-pref-model-version": "Model Version",
+			"mineru-pref-parse-generate-html": "Also generate HTML (always keep Markdown)",
+			"mineru-pref-parse-markdown-help": "Original Markdown is always saved in the attachment directory. When unchecked, Markdown is displayed directly as the main Zotero attachment. When HTML is checked, HTML is the main attachment; right-click and open the enclosing folder to view the .md file. AI summary and translation always use the original Markdown.",
+			"mineru-pref-parse-image-mode": "HTML Image Storage",
+			"mineru-pref-image-mode-folder": { label: "Separate images folder" },
+			"mineru-pref-image-mode-inline": { label: "Inline Base64 (single file)" },
+			"mineru-pref-parse-link-source-pdf": "Automatically link source PDF with parsed attachment",
+			"mineru-pref-related-help": "Enabled by default. Creates a two-way Related Item link between the source PDF and generated Markdown or HTML attachment. Only affects future parses; disabling will not remove existing links or retroactively link past attachments.",
+			"mineru-pref-note-include-images": "Include images when converting to note",
+			"mineru-pref-poll-interval-sec": "Polling Interval (seconds)",
+			"mineru-pref-timeout-sec": "Request Timeout (seconds)",
+			"mineru-pref-note-title-prefix": "Note Title Prefix",
+			"mineru-pref-llm-heading": "LLM Settings (AI Summary / Translation)",
+			"mineru-pref-llm-api-base-url": "LLM API Base URL",
+			"mineru-pref-llm-api-key": "LLM API Key",
+			"mineru-pref-llm-model": "LLM Model Name",
+			"mineru-pref-summary-language": "Summary Language",
+			"mineru-pref-summary-prompt": "AI Summary Prompt",
+			"mineru-pref-summary-prompt-textarea": { placeholder: "e.g. Please summarize the research problem, methodology, key findings, and limitations in {{language}}." },
+			"mineru-pref-summary-prompt-help": "Leave blank to use default summary prompt. Setting a prompt replaces the default system prompt. {{language}} will be replaced with the chosen summary language, and paper text is attached automatically. Clear and save to restore default.",
+			"mineru-pref-summary-request-json": "Summary Extra JSON Parameters",
+			"mineru-pref-translate-output-format": "Translation Output Format",
+			"mineru-pref-translate-format-html": { label: "Standalone HTML" },
+			"mineru-pref-translate-mode": "Translation Mode",
+			"mineru-pref-translate-mode-translation": { label: "Translation only" },
+			"mineru-pref-bilingual-option": { label: "Bilingual side-by-side columns (HTML only)" },
+			"mineru-pref-translate-language": "Translation Target Language",
+			"mineru-pref-translate-chunk-size": "Translation Chunk Size (characters)",
+			"mineru-pref-translate-concurrency": "Translation Concurrency",
+			"mineru-pref-translate-retry-count": "Translation Auto-Retry Count",
+			"mineru-pref-translate-request-json": "Translation Extra JSON Parameters",
+			"mineru-pref-save-button": "Save",
+			"mineru-pref-test-button": "Test MinerU Connection",
+			"mineru-pref-test-llm-button": "Test LLM Configuration",
+			"mineru-pref-bottom-help": "Parsing and translation allow choosing Markdown / HTML and image storage independently. Bilingual side-by-side is only supported in HTML; switching to Markdown reverts to translation only. Embedded images in Markdown depend on reader support. Extracted images are located in the attachment's images folder; existing attachments are not automatically converted."
+		};
+		for (let [id, val] of Object.entries(dict)) {
+			let el = typeof document !== "undefined" && document.querySelector ? document.querySelector(`[data-l10n-id="${id}"]`) : null;
+			if (!el) continue;
+			if (typeof val === "string") {
+				el.textContent = val;
+			} else if (typeof val === "object") {
+				if (val.placeholder) el.placeholder = val.placeholder;
+				if (val.label) {
+					el.setAttribute?.("label", val.label);
+					if (el.label !== undefined) el.label = val.label;
+				}
+			}
 		}
 	},
 
 	init() {
 		if (this.initialized) return;
 		try {
+			if (typeof window !== "undefined") {
+				window.MozXULElement?.insertFTLIfNeeded?.("zotero-mineru.ftl");
+			}
+			this.applyLocalization();
 			this.loadSettings();
 			let saveButton = this.$("mineru-save-button");
 			if (saveButton) {

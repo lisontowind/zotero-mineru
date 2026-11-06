@@ -5,16 +5,17 @@
 	flex="1"
 	onload="if (window.ZoteroMineruPreferences) { window.ZoteroMineruPreferences.init(); }"
 >
+	<link rel="localization" href="zotero-mineru.ftl" />
 	<html:div class="mineru-pane">
-		<html:h2>MinerU PDF 解析设置</html:h2>
+		<html:h2 data-l10n-id="mineru-pref-title">MinerU PDF 解析设置</html:h2>
 		<html:div class="mineru-grid">
-			<html:label for="mineru-api-base-url">API Base URL</html:label>
+			<html:label for="mineru-api-base-url" data-l10n-id="mineru-pref-api-base-url">API Base URL</html:label>
 			<html:input id="mineru-api-base-url" type="url" placeholder="https://mineru.net/api/v4" />
 
-			<html:label for="mineru-api-token">API Token</html:label>
-			<html:input id="mineru-api-token" type="password" placeholder="MinerU 控制台生成的 token" />
+			<html:label for="mineru-api-token" data-l10n-id="mineru-pref-api-token">API Token</html:label>
+			<html:input id="mineru-api-token" type="password" placeholder="MinerU 控制台生成的 token" data-l10n-id="mineru-pref-api-token-input" />
 
-			<html:label for="mineru-model-version">模型版本</html:label>
+			<html:label for="mineru-model-version" data-l10n-id="mineru-pref-model-version">模型版本</html:label>
 			<menulist id="mineru-model-version" native="true">
 				<menupopup>
 					<menuitem label="vlm" value="vlm" />
@@ -22,49 +23,49 @@
 				</menupopup>
 			</menulist>
 
-			<html:label for="mineru-parseGenerateHTML">同时生成 HTML（始终保留 Markdown）</html:label>
+			<html:label for="mineru-parseGenerateHTML" data-l10n-id="mineru-pref-parse-generate-html">同时生成 HTML（始终保留 Markdown）</html:label>
 			<html:div>
 				<html:input id="mineru-parseGenerateHTML" type="checkbox" aria-describedby="mineru-parse-markdown-help" />
-				<html:p id="mineru-parse-markdown-help" class="mineru-help">原始解析 Markdown 始终保存在附件目录中。未勾选时，Markdown 直接显示为 Zotero 附件；勾选 HTML 后，显示的是 HTML 主附件，请右键该附件并打开所在文件夹，查看同目录中的 .md 文件。AI 总结和翻译始终读取原始 Markdown。</html:p>
+				<html:p id="mineru-parse-markdown-help" class="mineru-help" data-l10n-id="mineru-pref-parse-markdown-help">原始解析 Markdown 始终保存在附件目录中。未勾选时，Markdown 直接显示为 Zotero 附件；勾选 HTML 后，显示的是 HTML 主附件，请右键该附件并打开所在文件夹，查看同目录中的 .md 文件。AI 总结和翻译始终读取原始 Markdown。</html:p>
 			</html:div>
 
-			<html:label for="mineru-parseImageMode">HTML 图片保存方式</html:label>
+			<html:label for="mineru-parseImageMode" data-l10n-id="mineru-pref-parse-image-mode">HTML 图片保存方式</html:label>
 			<menulist id="mineru-parseImageMode" native="true"><menupopup>
-				<menuitem label="独立 images 文件夹" value="folder" />
-				<menuitem label="Base64 内嵌（单文件）" value="inline" />
+				<menuitem label="独立 images 文件夹" value="folder" data-l10n-id="mineru-pref-image-mode-folder" />
+				<menuitem label="Base64 内嵌（单文件）" value="inline" data-l10n-id="mineru-pref-image-mode-inline" />
 			</menupopup></menulist>
 
 
-			<html:label for="mineru-parseLinkSourcePDF">自动关联源 PDF 与解析附件</html:label>
+			<html:label for="mineru-parseLinkSourcePDF" data-l10n-id="mineru-pref-parse-link-source-pdf">自动关联源 PDF 与解析附件</html:label>
 			<html:div>
 				<html:input id="mineru-parseLinkSourcePDF" type="checkbox" aria-describedby="mineru-related-help" />
-				<html:p id="mineru-related-help" class="mineru-help">默认开启，在源 PDF 与生成的 Markdown 或 HTML 主附件之间建立双向 Related Item 关联。仅影响后续解析；关闭不会删除已有关系，也不自动补关联历史附件。</html:p>
+				<html:p id="mineru-related-help" class="mineru-help" data-l10n-id="mineru-pref-related-help">默认开启，在源 PDF 与生成的 Markdown 或 HTML 主附件之间建立双向 Related Item 关联。仅影响后续解析；关闭不会删除已有关系，也不自动补关联历史附件。</html:p>
 			</html:div>
-			<html:label for="mineru-note-include-images">转化笔记时带图</html:label>
+			<html:label for="mineru-note-include-images" data-l10n-id="mineru-pref-note-include-images">转化笔记时带图</html:label>
 			<html:input id="mineru-note-include-images" type="checkbox" />
 
-			<html:label for="mineru-poll-interval-sec">轮询间隔(秒)</html:label>
+			<html:label for="mineru-poll-interval-sec" data-l10n-id="mineru-pref-poll-interval-sec">轮询间隔(秒)</html:label>
 			<html:input id="mineru-poll-interval-sec" type="number" min="1" max="60" step="1" />
 
-			<html:label for="mineru-timeout-sec">请求超时(秒)</html:label>
+			<html:label for="mineru-timeout-sec" data-l10n-id="mineru-pref-timeout-sec">请求超时(秒)</html:label>
 			<html:input id="mineru-timeout-sec" type="number" min="5" max="3600" step="1" />
 
-			<html:label for="mineru-note-title-prefix">笔记标题前缀</html:label>
+			<html:label for="mineru-note-title-prefix" data-l10n-id="mineru-pref-note-title-prefix">笔记标题前缀</html:label>
 			<html:input id="mineru-note-title-prefix" type="text" />
 		</html:div>
 
-		<html:h3>LLM 设置（AI 总结 / 翻译功能）</html:h3>
+		<html:h3 data-l10n-id="mineru-pref-llm-heading">LLM 设置（AI 总结 / 翻译功能）</html:h3>
 		<html:div class="mineru-grid">
-			<html:label for="mineru-llm-api-base-url">LLM API Base URL</html:label>
+			<html:label for="mineru-llm-api-base-url" data-l10n-id="mineru-pref-llm-api-base-url">LLM API Base URL</html:label>
 			<html:input id="mineru-llm-api-base-url" type="url" placeholder="https://api.deepseek.com/v1" />
 
-			<html:label for="mineru-llm-api-key">LLM API Key</html:label>
+			<html:label for="mineru-llm-api-key" data-l10n-id="mineru-pref-llm-api-key">LLM API Key</html:label>
 			<html:input id="mineru-llm-api-key" type="password" placeholder="sk-..." />
 
-			<html:label for="mineru-llm-model">LLM 模型名称</html:label>
+			<html:label for="mineru-llm-model" data-l10n-id="mineru-pref-llm-model">LLM 模型名称</html:label>
 			<html:input id="mineru-llm-model" type="text" placeholder="deepseek-chat" />
 
-			<html:label for="mineru-summary-language">总结语言</html:label>
+			<html:label for="mineru-summary-language" data-l10n-id="mineru-pref-summary-language">总结语言</html:label>
 			<menulist id="mineru-summary-language" native="true">
 				<menupopup>
 					<menuitem label="中文" value="中文" />
@@ -77,33 +78,33 @@
 				</menupopup>
 			</menulist>
 
-			<html:label for="mineru-summary-prompt">AI 总结 Prompt</html:label>
+			<html:label for="mineru-summary-prompt" data-l10n-id="mineru-pref-summary-prompt">AI 总结 Prompt</html:label>
 			<html:div>
-				<html:textarea id="mineru-summary-prompt" rows="8" aria-describedby="mineru-summary-prompt-help" placeholder="例如：请用 {{language}} 总结论文的研究问题、核心方法、创新点和局限性。"></html:textarea>
-				<html:p id="mineru-summary-prompt-help" class="mineru-help">留空使用默认总结提示词；填写后替换默认系统提示词。{{language}} 会替换为所选总结语言，论文正文会自动附加，无需粘贴。清空并保存可恢复默认。</html:p>
+				<html:textarea id="mineru-summary-prompt" rows="8" aria-describedby="mineru-summary-prompt-help" placeholder="例如：请用 {{language}} 总结论文的研究问题、核心方法、创新点和局限性。" data-l10n-id="mineru-pref-summary-prompt-textarea"></html:textarea>
+				<html:p id="mineru-summary-prompt-help" class="mineru-help" data-l10n-id="mineru-pref-summary-prompt-help">留空使用默认总结提示词；填写后替换默认系统提示词。{{language}} 会替换为所选总结语言，论文正文会自动附加，无需粘贴。清空并保存可恢复默认。</html:p>
 			</html:div>
 
-			<html:label for="mineru-summary-request-json">总结额外 JSON 参数</html:label>
+			<html:label for="mineru-summary-request-json" data-l10n-id="mineru-pref-summary-request-json">总结额外 JSON 参数</html:label>
 			<html:textarea
 				id="mineru-summary-request-json"
 				rows="4"
 				placeholder='{"enable_thinking": true}'
 			></html:textarea>
 
-			<html:label for="mineru-translateOutputFormat">翻译保存格式</html:label>
+			<html:label for="mineru-translateOutputFormat" data-l10n-id="mineru-pref-translate-output-format">翻译保存格式</html:label>
 			<menulist id="mineru-translateOutputFormat" native="true"><menupopup>
 				<menuitem label="Markdown" value="md" />
-				<menuitem label="单文件 HTML" value="html" />
+				<menuitem label="单文件 HTML" value="html" data-l10n-id="mineru-pref-translate-format-html" />
 			</menupopup></menulist>
 
-			<html:label for="mineru-translateMode">翻译模式</html:label>
+			<html:label for="mineru-translateMode" data-l10n-id="mineru-pref-translate-mode">翻译模式</html:label>
 			<menulist id="mineru-translateMode" native="true"><menupopup>
-				<menuitem label="仅译文" value="translation" />
-				<menuitem id="mineru-bilingual-option" label="原文译文双栏对照（仅 HTML）" value="bilingual" />
+				<menuitem label="仅译文" value="translation" data-l10n-id="mineru-pref-translate-mode-translation" />
+				<menuitem id="mineru-bilingual-option" label="原文译文双栏对照（仅 HTML）" value="bilingual" data-l10n-id="mineru-pref-bilingual-option" />
 			</menupopup></menulist>
 
 
-			<html:label for="mineru-translate-language">翻译目标语言</html:label>
+			<html:label for="mineru-translate-language" data-l10n-id="mineru-pref-translate-language">翻译目标语言</html:label>
 			<menulist id="mineru-translate-language" native="true">
 				<menupopup>
 					<menuitem label="中文" value="中文" />
@@ -116,16 +117,16 @@
 				</menupopup>
 			</menulist>
 
-			<html:label for="mineru-translate-chunk-size">翻译分段字符数</html:label>
+			<html:label for="mineru-translate-chunk-size" data-l10n-id="mineru-pref-translate-chunk-size">翻译分段字符数</html:label>
 			<html:input id="mineru-translate-chunk-size" type="number" min="5000" max="60000" step="1000" />
 
-			<html:label for="mineru-translate-concurrency">翻译并发请求数</html:label>
+			<html:label for="mineru-translate-concurrency" data-l10n-id="mineru-pref-translate-concurrency">翻译并发请求数</html:label>
 			<html:input id="mineru-translate-concurrency" type="number" min="1" max="8" step="1" />
 
-			<html:label for="mineru-translate-retry-count">翻译自动重试次数</html:label>
+			<html:label for="mineru-translate-retry-count" data-l10n-id="mineru-pref-translate-retry-count">翻译自动重试次数</html:label>
 			<html:input id="mineru-translate-retry-count" type="number" min="1" max="5" step="1" />
 
-			<html:label for="mineru-translate-request-json">翻译额外 JSON 参数</html:label>
+			<html:label for="mineru-translate-request-json" data-l10n-id="mineru-pref-translate-request-json">翻译额外 JSON 参数</html:label>
 			<html:textarea
 				id="mineru-translate-request-json"
 				rows="4"
@@ -133,13 +134,13 @@
 			></html:textarea>
 		</html:div>
 		<html:div class="mineru-actions">
-			<html:button id="mineru-save-button" type="button">保存</html:button>
-			<html:button id="mineru-test-button" type="button">测试 MinerU 连接</html:button>
-			<html:button id="mineru-test-llm-button" type="button">测试当前 LLM 配置</html:button>
+			<html:button id="mineru-save-button" type="button" data-l10n-id="mineru-pref-save-button">保存</html:button>
+			<html:button id="mineru-test-button" type="button" data-l10n-id="mineru-pref-test-button">测试 MinerU 连接</html:button>
+			<html:button id="mineru-test-llm-button" type="button" data-l10n-id="mineru-pref-test-llm-button">测试当前 LLM 配置</html:button>
 			<html:span id="mineru-status"></html:span>
 		</html:div>
 		<html:pre id="mineru-test-output" class="mineru-test-output"></html:pre>
-		<html:p class="mineru-help">
+		<html:p class="mineru-help" data-l10n-id="mineru-pref-bottom-help">
 			解析和翻译可分别选择 Markdown / HTML 与图片保存方式。双栏对照仅支持 HTML；切换为 Markdown 会恢复仅译文。Markdown 内嵌图片的显示效果取决于阅读器。分离图片位于附件的 images 文件夹；已有附件不自动转换。
 		</html:p>
 	</html:div>
