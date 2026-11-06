@@ -1,6 +1,6 @@
 # Zotero MinerU Plugin
 
-Zotero 8/9/10 插件，调用 MinerU 官方 API 解析 PDF，始终保存原始 Markdown，并支持可选 HTML、Markdown 转笔记、LLM 总结和翻译。本文描述 v0.1.71 的实现；版本号以 manifest.json 为准。
+Zotero 8/9/10 插件，调用 MinerU 官方 API 解析 PDF，始终保存原始 Markdown，并支持可选 HTML、Markdown 转笔记、LLM 总结和翻译。当前开发分支基于 v0.1.71，包含英文界面与 LLM 响应兼容改进；版本号以 manifest.json 为准。
 
 ## 项目结构
 
@@ -24,6 +24,9 @@ icon.svg / icon16.svg       # 插件图标
 vendor/katex/              # KaTeX 0.16.22、MIT 许可证和来源说明
 tests/output-formats.test.cjs # Node VM 回归测试，模拟 Zotero / IOUtils / LLM
 tests/network-reliability.test.cjs # 下载认证、网络中止、退避重试和全文总结回归测试
+tests/llm-response-compatibility.test.cjs # SSE 完整性、原生完成状态及含代码的批量译文
+tests/abort-controller.test.cjs # Zotero 窗口控制器回退、无控制器拒绝请求及真实中止
+tests/localization.test.cjs # 中英文菜单及设置语言检测
 tests/document-safety.test.cjs # 链接协议、图片路径边界和解析器失败回退
 tests/settings-safety.test.cjs # 设置先校验后写入、范围与保留字段校验
 tests/task-locks.test.cjs # 跨窗口任务互斥、批次预留及异常后释放
@@ -220,8 +223,10 @@ Parent Item (论文条目)
 ### 网络超时与 LLM 完整性
 
 - MinerU 申请上传、上传、轮询、结果下载及总结/翻译请求使用 `withRequestTimeout()`，将 AbortSignal 传给 fetch，超时或失败时主动中止；超时涵盖响应正文读取。普通 `withTimeout()` 继续用于嵌图等非网络操作。
+- bootstrap 和核心脚本从 Zotero 主窗口补齐缺失的 AbortController / Headers；设置页亦可从窗口获取原生控制器。无法创建原生 AbortController 时，在发出请求前明确报错，禁止以空事件监听的模拟 signal 代替。设置页的 MinerU 测试同样显示此错误。
 - MinerU 单次网络请求使用 `timeoutSec`；轮询请求与等待受剩余总时限约束。下载的每个候选地址各有一次请求时限。
-- `getLLMResponseContent()` 共用于总结和翻译：明确的 finish_reason 只接受 stop，length、content_filter、tool_calls 等均报错；兼容未提供 finish_reason 的服务，正文仍必须为非空字符串。
+- 总结、翻译及设置页 LLM 测试均校验完成状态：OpenAI finish_reason、Gemini finishReason 和 Ollama done_reason 支持大小写规范化，只接受 stop / end_turn / stop_sequence；length / MAX_TOKENS、安全过滤及 done=false 均拒绝。普通 JSON 仍兼容未提供完成原因的服务。Gemini 多个正文 part 合并，thought part 不保存。
+- LLM URL 可填写 Base URL 或完整 /chat/completions 地址；请求默认 stream=false，接受 JSON、带 BOM / 外层代码围栏的 JSON，以及网关返回的 OpenAI 风格 SSE。SSE 按事件合并 data 行，要求明确 finish_reason 或 [DONE]，损坏事件、错误事件和结束后追加数据均报错，禁止把残缺内容当作完整结果。忽略其他 choice 与 usage 事件；正文中的 think 块被移除。
 - 截断译文进入现有分段重试和部分保存流程，截断内容本身不作为成功分块保留；不声称能检测模型未报告的内容遗漏。
 
 ### 图片隔离与文字批量翻译
@@ -230,6 +235,7 @@ Parent Item (论文条目)
 - 无图片分块直接请求和返回 Markdown；含图片分块把文字片段作为 JSON 字符串数组一次发送，要求返回同序同数量的 Markdown 字符串数组。
 - 一个分块内有多张图也只发一次请求；纯图片分块直接原样返回，不调用模型。
 - 返回数组格式、数量和非空字符串校验通过后，在本地按原位置插回图片；校验失败走现有重试流程。
+- 批量译文先直接解析完整 JSON，再兼容说明文字或外层代码围栏中的平衡数组；JSON 字符串内部的代码围栏、引号、反斜杠和方括号属于译文，不能截取为包装。
 - 图片引用、内部标识和 Base64 均不应出现在模型输入中；禁止回到要求模型原样保留图片标识的方案。
 - Markdown 译文拥有自己的 images 文件夹，不依赖原解析附件的 storage 路径；HTML 译文固定内嵌图片，保存为单文件且不另存译文 Markdown。
 - 双栏 HTML 使用同一批翻译结果本地渲染，按翻译分块对照，不增加 HTML 生成请求。
@@ -284,6 +290,8 @@ Parent Item (论文条目)
 
 preferences.xhtml 分两个区域：MinerU 设置 + LLM 设置，Grid 布局（170px 标签列）。
 
+设置及主要运行界面按 Zotero 语言切换中文或英文，非中文环境使用英文。设置文字通过 en-US / zh-CN Fluent 资源加载，并保留 JavaScript 英文回退；FTL 中的字面量 {{language}} 必须写成 `{ "{{language}}" }`，不能被解释为消息引用。总结和翻译语言菜单包含 Tiếng Việt。
+
 模型版本、总结语言和翻译目标语言使用带 `native="true"` 的 XUL `menulist`，并通过 `command` 事件保存。不要改回嵌入式 HTML `select`，否则在 Zotero 偏好面板中可能出现下拉菜单偶发无法弹出的问题。
 
 三个按钮：
@@ -314,6 +322,7 @@ node --check mineru.js
 node --check preferences.js
 node tests/output-formats.test.cjs
 node tests/network-reliability.test.cjs
+node --test tests/llm-response-compatibility.test.cjs tests/abort-controller.test.cjs tests/localization.test.cjs
 node tests/related-items.test.cjs
 node --test tests/document-safety.test.cjs tests/settings-safety.test.cjs
 node --test tests/task-locks.test.cjs
@@ -346,7 +355,7 @@ git diff --check
 - **窗口状态**：`popupListeners: new WeakMap()` 避免内存泄漏
 - **错误上下文**：`wrapErrorWithParseStatus()` 在错误消息中附加当前解析阶段
 - **进度反馈**：`Zotero.ProgressWindow` + `ItemProgress`，`reportParseStatus()` 统一更新
-- **UI 字符串**：大部分硬编码中文，FTL 仅用于菜单标签
+- **UI 字符串**：设置和菜单使用 Fluent，主要运行提示按 isEnglishLocale() 选择中英文；同步维护两种语言及设置页回退文字
 - **Tab 缩进**，无分号风格不一致（部分有部分无，保持现有风格即可）
 - **URL 安全**：`maskURLForError()` 截短 URL 用于错误日志，`normalizeDownloadURL()` 验证下载地址
 

@@ -2601,16 +2601,12 @@ ZoteroMineru = {
 				this.log(`Failed to create AbortController: ${e}`);
 			}
 		}
-		return {
-			signal: {
-				aborted: false,
-				addEventListener() {},
-				removeEventListener() {}
-			},
-			abort() {
-				this.signal.aborted = true;
-			}
-		};
+		let error = new Error(this.isEnglishLocale()
+			? "AbortController is unavailable. Open a Zotero main window and retry."
+			: "无法创建 AbortController，请打开 Zotero 主窗口后重试。");
+		error.code = "ABORT_CONTROLLER_UNAVAILABLE";
+		error.retryable = false;
+		throw error;
 	},
 
 	async withRequestTimeout(taskFactory, timeoutMS = 120000, label = "网络请求") {
@@ -2661,48 +2657,64 @@ ZoteroMineru = {
 	},
 
 	parseSSEResponse(text) {
-		let lines = String(text || "").split(/\r?\n/);
-		let fullContent = "";
-		let lastModel = "";
-		let lastFinishReason = "stop";
-		let foundAnyChunk = false;
-		for (let line of lines) {
-			line = line.trim();
-			if (!line || !line.startsWith("data:")) continue;
-			let dataStr = line.slice(5).trim();
-			if (!dataStr) continue;
-			if (dataStr === "[DONE]") {
-				foundAnyChunk = true;
-				continue;
+		let isEn = this.isEnglishLocale();
+		let incomplete = (detail) => {
+			let error = new Error(isEn ? "LLM stream incomplete: " + detail : "LLM 流式响应不完整：" + detail);
+			error.code = "LLM_INCOMPLETE";
+			return error;
+		};
+		let fullContent = "", lastModel = "", lastFinishReason = null;
+		let dataLines = [], eventName = "", sawData = false, done = false;
+		let consumeEvent = () => {
+			let type = eventName;
+			eventName = "";
+			if (!dataLines.length) return;
+			let data = dataLines.join("\n").trim();
+			dataLines = [];
+			if (!data) return;
+			sawData = true;
+			if (done) throw incomplete("data after [DONE]");
+			if (data === "[DONE]") {
+				done = true;
+				return;
 			}
-			try {
-				let chunk = JSON.parse(dataStr);
-				foundAnyChunk = true;
-				if (chunk.model) lastModel = chunk.model;
-				let choice = chunk.choices?.[0];
-				if (choice?.finish_reason) lastFinishReason = choice.finish_reason;
-				let delta = choice?.delta?.content ?? choice?.text ?? "";
-				if (typeof delta === "string") {
-					fullContent += delta;
-				} else if (Array.isArray(delta)) {
-					fullContent += delta.map(p => typeof p === "string" ? p : p?.text || "").join("");
-				}
-			} catch (_) {}
+			if (type === "error") throw incomplete(data.slice(0, 200));
+			let chunk;
+			try { chunk = JSON.parse(data); }
+			catch (_) { throw incomplete("invalid JSON event"); }
+			if (!chunk || typeof chunk !== "object") throw incomplete("invalid event");
+			if (chunk.error) throw incomplete(chunk.error.message || String(chunk.error));
+			if (chunk.model) lastModel = chunk.model;
+			let choice = chunk.choices?.find(item => item.index === undefined || item.index === 0);
+			if (!choice) return; // Usage-only events and other completion choices carry no text for choice 0.
+			if (choice.finish_reason) lastFinishReason = choice.finish_reason;
+			let delta = choice.delta?.content ?? choice.text ?? "";
+			if (typeof delta === "string") {
+				fullContent += delta;
+			} else if (Array.isArray(delta)) {
+				fullContent += delta.map(part => typeof part === "string" ? part : part?.text || "").join("");
+			}
+		};
+		for (let line of String(text || "").split(/\r\n|\r|\n/)) {
+			if (!line) {
+				consumeEvent();
+			} else if (line.startsWith("data:")) {
+				dataLines.push(line.slice(5).replace(/^ /, ""));
+			} else if (line.startsWith("event:")) {
+				eventName = line.slice(6).trim();
+			}
 		}
-		if (foundAnyChunk && fullContent.trim()) {
-			return {
-				model: lastModel,
-				choices: [
-					{
-						finish_reason: lastFinishReason,
-						message: { role: "assistant", content: fullContent.trim() }
-					}
-				]
-			};
-		}
-		return null;
+		consumeEvent();
+		if (!sawData) return null;
+		if (!done && !lastFinishReason) throw incomplete("missing finish_reason or [DONE]");
+		return {
+			model: lastModel,
+			choices: [{
+				finish_reason: lastFinishReason || "stop",
+				message: { role: "assistant", content: fullContent.trim() }
+			}]
+		};
 	},
-
 	parseLLMResponseText(rawText, responseStatus = 200) {
 		let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
 		let text = String(rawText ?? "").replace(/^\uFEFF/, "").trim();
@@ -2748,12 +2760,14 @@ ZoteroMineru = {
 
 	getLLMResponseContent(result) {
 		let choice = result?.choices?.[0];
-		let reason = choice?.finish_reason;
+		let candidate = result?.candidates?.[0];
+		let reason = choice?.finish_reason ?? candidate?.finishReason ?? result?.done_reason;
 		let normReason = String(reason || "").toLowerCase();
-		let isComplete = !reason || normReason === "stop" || normReason === "end_turn" || normReason === "stop_sequence";
+		let isComplete = result?.done !== false
+			&& (!reason || ["stop", "end_turn", "stop_sequence"].includes(normReason));
 		if (!isComplete) {
 			let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
-			let error = new Error(normReason === "length"
+			let error = new Error(["length", "max_tokens"].includes(normReason)
 				? (isEn ? "LLM output was truncated. Please adjust max tokens." : "LLM 输出被截断，未保存为完整结果。请减小翻译分段或调整模型输出上限后重试。")
 				: (isEn ? `LLM response incomplete (${reason}).` : `LLM 未完整完成回复（${reason}），未保存为完整结果。`));
 			error.code = "LLM_INCOMPLETE";
@@ -2768,8 +2782,9 @@ ZoteroMineru = {
 				content = choice.text;
 			} else if (typeof result?.response === "string" && result.response.trim()) {
 				content = result.response;
-			} else if (typeof result?.candidates?.[0]?.content?.parts?.[0]?.text === "string") {
-				content = result.candidates[0].content.parts[0].text;
+			} else if (Array.isArray(candidate?.content?.parts)) {
+				content = candidate.content.parts.filter(part => !part?.thought)
+					.map(part => typeof part?.text === "string" ? part.text : "").join("");
 			}
 		}
 		if (typeof content === "string") {
@@ -3919,6 +3934,33 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 		return { parts, texts, hasImages: cursor > 0 };
 	},
 
+	parseTranslationArray(content) {
+		let text = content.trim();
+		try { return JSON.parse(text); }
+		catch (_) {}
+		// Locate a balanced JSON array in conversational/fenced output. Brackets
+		// and Markdown code fences inside JSON strings are document content.
+		for (let start = text.indexOf("["); start !== -1; start = text.indexOf("[", start + 1)) {
+			let depth = 0, quoted = false, escaped = false;
+			for (let end = start; end < text.length; end++) {
+				let char = text[end];
+				if (quoted) {
+					if (escaped) escaped = false;
+					else if (char === "\\") escaped = true;
+					else if (char === '"') quoted = false;
+					continue;
+				}
+				if (char === '"') quoted = true;
+				else if (char === "[") depth++;
+				else if (char === "]" && --depth === 0) {
+					try { return JSON.parse(text.slice(start, end + 1)); }
+					catch (_) { break; }
+				}
+			}
+		}
+		throw new Error("Invalid translation JSON array");
+	},
+
 	async callLLMForTranslation(text, language, llmSettings, chunkIndex, totalChunks) {
 		let prepared = this.prepareTranslationText(text);
 		if (!prepared.texts.length) return text;
@@ -3997,11 +4039,7 @@ Rules:
 			if (!batch) return content.trim();
 			let translated;
 			try {
-				let cleanContent = content.trim();
-				let codeMatch = cleanContent.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
-				let jsonCandidate = codeMatch ? codeMatch[1].trim() : cleanContent;
-				let arrayMatch = jsonCandidate.match(/\[\s*[\s\S]*\s*\]/);
-				translated = JSON.parse(arrayMatch ? arrayMatch[0] : jsonCandidate);
+				translated = this.parseTranslationArray(content);
 			}
 			catch (e) { throw new Error("翻译文字分片返回格式无效，请重试"); }
 			if (!Array.isArray(translated) || translated.length !== prepared.texts.length ||

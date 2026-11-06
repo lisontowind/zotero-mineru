@@ -7,6 +7,7 @@ A Zotero 8/9/10 plugin that sends PDF attachments to the MinerU API, saves parse
 ## Features
 
 - Parse selected PDF attachments with MinerU using `pipeline` or `vlm`.
+- Use Chinese or English preferences and main workflow messages based on the Zotero UI language. Summary and translation languages include Vietnamese.
 - Parsing always saves Markdown with an `images/` folder. Optional HTML (off by default) becomes the main attachment, keeping Markdown alongside it. HTML can share the images folder or embed images.
 - Preserve extracted images under the parsed attachment's `images/` directory.
 - Generate AI summaries from parsed Markdown or HTML attachments.
@@ -15,6 +16,7 @@ A Zotero 8/9/10 plugin that sends PDF attachments to the MinerU API, saves parse
 - Image references stay local during translation. Text fragments around images are batched within each chunk, then images are restored in their original positions. Fragment count mismatches trigger retries; image markers are never sent to the model.
 - Translate long documents with chunking, bounded concurrency, automatic retry, and retry-failed-chunks confirmation.
 - Translation retries use exponential backoff and consider Retry-After. Permanent errors such as invalid credentials are not automatically retried. Summary and translation reject responses explicitly reported as truncated or incomplete.
+- Accept JSON or gateway SSE replies, including BOM and outer JSON code fences. Interrupted or malformed streams and native response truncation signals are rejected. Code blocks inside JSON translation fragments are preserved.
 - Save translations as Markdown (default, with an images folder) or standalone HTML (embedded images). The model only translates Markdown; HTML is rendered locally. HTML supports bilingual columns. Markdown contains only the translation, while the bilingual preference is retained.
 - After failures, retry failed chunks, save completed translations, or discard. Partial output displays completion counts and preserves untranslated source text with a label (bilingual HTML labels the translation column). Partial attachments use `#MinerU-Translation-Partial` and do not block another translation. Cross-task resume is not supported.
 - Existing files remain unchanged; Markdown attachments from released v0.1.58 remain supported.

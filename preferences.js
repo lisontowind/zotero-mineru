@@ -46,10 +46,12 @@ var ZoteroMineruPreferences = {
 		if (AC) {
 			return new AC();
 		}
-		return {
-			signal: { aborted: false, addEventListener() {}, removeEventListener() {} },
-			abort() { this.signal.aborted = true; }
-		};
+		let error = new Error(this.isEnglishLocale()
+			? "AbortController is unavailable. Open a Zotero main window and retry."
+			: "无法创建 AbortController，请打开 Zotero 主窗口后重试。");
+		error.code = "ABORT_CONTROLLER_UNAVAILABLE";
+		error.retryable = false;
+		throw error;
 	},
 
 	$(id) {
@@ -244,9 +246,10 @@ var ZoteroMineruPreferences = {
 			]
 		};
 
-		let controller = this.createAbortController();
-		let timeoutID = setTimeout(() => controller.abort(), settings.timeoutMS);
+		let timeoutID;
 		try {
+			let controller = this.createAbortController();
+			timeoutID = setTimeout(() => controller.abort(), settings.timeoutMS);
 			this.setStatus(this.isEnglishLocale() ? "Testing MinerU connection..." : "正在测试 MinerU 连接...");
 			this.setOutput(`POST ${endpoint}\n${this.isEnglishLocale() ? "Token length" : "Token长度"}: ${settings.apiToken.length}`);
 
@@ -328,44 +331,101 @@ var ZoteroMineruPreferences = {
 	},
 
 	parseSSEResponse(text) {
-		let lines = String(text || "").split(/\r?\n/);
-		let fullContent = "";
-		let lastModel = "";
-		let foundAnyChunk = false;
-		for (let line of lines) {
-			line = line.trim();
-			if (!line || !line.startsWith("data:")) continue;
-			let dataStr = line.slice(5).trim();
-			if (!dataStr) continue;
-			if (dataStr === "[DONE]") {
-				foundAnyChunk = true;
-				continue;
+		let isEn = this.isEnglishLocale();
+		let incomplete = (detail) => {
+			let error = new Error(isEn ? "LLM stream incomplete: " + detail : "LLM 流式响应不完整：" + detail);
+			error.code = "LLM_INCOMPLETE";
+			return error;
+		};
+		let fullContent = "", lastModel = "", lastFinishReason = null;
+		let dataLines = [], eventName = "", sawData = false, done = false;
+		let consumeEvent = () => {
+			let type = eventName;
+			eventName = "";
+			if (!dataLines.length) return;
+			let data = dataLines.join("\n").trim();
+			dataLines = [];
+			if (!data) return;
+			sawData = true;
+			if (done) throw incomplete("data after [DONE]");
+			if (data === "[DONE]") {
+				done = true;
+				return;
 			}
-			try {
-				let chunk = JSON.parse(dataStr);
-				foundAnyChunk = true;
-				if (chunk.model) lastModel = chunk.model;
-				let choice = chunk.choices?.[0];
-				let delta = choice?.delta?.content ?? choice?.text ?? "";
-				if (typeof delta === "string") {
-					fullContent += delta;
-				} else if (Array.isArray(delta)) {
-					fullContent += delta.map(p => typeof p === "string" ? p : p?.text || "").join("");
-				}
-			} catch (_) {}
+			if (type === "error") throw incomplete(data.slice(0, 200));
+			let chunk;
+			try { chunk = JSON.parse(data); }
+			catch (_) { throw incomplete("invalid JSON event"); }
+			if (!chunk || typeof chunk !== "object") throw incomplete("invalid event");
+			if (chunk.error) throw incomplete(chunk.error.message || String(chunk.error));
+			if (chunk.model) lastModel = chunk.model;
+			let choice = chunk.choices?.find(item => item.index === undefined || item.index === 0);
+			if (!choice) return; // Usage-only events and other completion choices carry no text for choice 0.
+			if (choice.finish_reason) lastFinishReason = choice.finish_reason;
+			let delta = choice.delta?.content ?? choice.text ?? "";
+			if (typeof delta === "string") {
+				fullContent += delta;
+			} else if (Array.isArray(delta)) {
+				fullContent += delta.map(part => typeof part === "string" ? part : part?.text || "").join("");
+			}
+		};
+		for (let line of String(text || "").split(/\r\n|\r|\n/)) {
+			if (!line) {
+				consumeEvent();
+			} else if (line.startsWith("data:")) {
+				dataLines.push(line.slice(5).replace(/^ /, ""));
+			} else if (line.startsWith("event:")) {
+				eventName = line.slice(6).trim();
+			}
 		}
-		if (foundAnyChunk && fullContent.trim()) {
-			return {
-				model: lastModel,
-				choices: [
-					{
-						finish_reason: "stop",
-						message: { role: "assistant", content: fullContent.trim() }
-					}
-				]
-			};
+		consumeEvent();
+		if (!sawData) return null;
+		if (!done && !lastFinishReason) throw incomplete("missing finish_reason or [DONE]");
+		return {
+			model: lastModel,
+			choices: [{
+				finish_reason: lastFinishReason || "stop",
+				message: { role: "assistant", content: fullContent.trim() }
+			}]
+		};
+	},
+	getLLMResponseContent(result) {
+		let choice = result?.choices?.[0];
+		let candidate = result?.candidates?.[0];
+		let reason = choice?.finish_reason ?? candidate?.finishReason ?? result?.done_reason;
+		let normReason = String(reason || "").toLowerCase();
+		let isComplete = result?.done !== false
+			&& (!reason || ["stop", "end_turn", "stop_sequence"].includes(normReason));
+		if (!isComplete) {
+			let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
+			let error = new Error(["length", "max_tokens"].includes(normReason)
+				? (isEn ? "LLM output was truncated. Please adjust max tokens." : "LLM 输出被截断，未保存为完整结果。请减小翻译分段或调整模型输出上限后重试。")
+				: (isEn ? `LLM response incomplete (${reason}).` : `LLM 未完整完成回复（${reason}），未保存为完整结果。`));
+			error.code = "LLM_INCOMPLETE";
+			throw error;
 		}
-		return null;
+		let content = choice?.message?.content;
+		if (Array.isArray(content)) {
+			content = content.map(part => typeof part === "string" ? part : part?.text || "").join("");
+		}
+		if (typeof content !== "string" || !content.trim()) {
+			if (typeof choice?.text === "string" && choice.text.trim()) {
+				content = choice.text;
+			} else if (typeof result?.response === "string" && result.response.trim()) {
+				content = result.response;
+			} else if (Array.isArray(candidate?.content?.parts)) {
+				content = candidate.content.parts.filter(part => !part?.thought)
+					.map(part => typeof part?.text === "string" ? part.text : "").join("");
+			}
+		}
+		if (typeof content === "string") {
+			content = content.replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+		}
+		if (typeof content !== "string" || !content.trim()) {
+			let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
+			throw new Error(isEn ? "LLM returned empty or invalid response" : "LLM 返回内容为空或格式无效");
+		}
+		return content.trim();
 	},
 
 	async sendLLMTestRequest({ endpoint, apiKey, payload, timeoutMS = 30000 }) {
@@ -396,13 +456,6 @@ var ZoteroMineruPreferences = {
 				throw new Error(`HTTP ${response.status}: ${text.slice(0, 500)}`);
 			}
 
-			if (text.startsWith("<") || /<html|<!DOCTYPE/i.test(text)) {
-				let preview = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
-				throw new Error(isEn
-					? `LLM API returned HTML instead of JSON: ${preview || "HTML response"}. Please check API Base URL.`
-					: `LLM API 返回了 HTML 网页而非 JSON 数据：${preview || "HTML 页面"}。请检查 Base URL 是否正确。`);
-			}
-
 			let json = null;
 			try {
 				json = JSON.parse(text);
@@ -417,16 +470,14 @@ var ZoteroMineruPreferences = {
 				}
 			}
 
-			let reply = json?.choices?.[0]?.message?.content
-				|| json?.choices?.[0]?.text
-				|| json?.response
-				|| "";
-			if (typeof reply === "string") {
-				reply = reply.replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+			if (!json && (text.startsWith("<") || /<html|<!DOCTYPE/i.test(text))) {
+				let preview = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+				throw new Error(isEn
+					? `LLM API returned HTML instead of JSON: ${preview || "HTML response"}. Please check API Base URL.`
+					: `LLM API 返回了 HTML 网页而非 JSON 数据：${preview || "HTML 页面"}。请检查 Base URL 是否正确。`);
 			}
-			if (!reply) {
-				throw new Error(isEn ? "LLM did not return a valid response" : "LLM 未返回有效回复");
-			}
+
+			let reply = this.getLLMResponseContent(json);
 
 			return {
 				model: json?.model || payload.model,
