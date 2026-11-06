@@ -28,6 +28,30 @@ var ZoteroMineruPreferences = {
 		{ id: "mineru-translate-request-json", pref: "translateRequestJSON", type: "string" }
 	],
 
+	createAbortController() {
+		let AC = typeof AbortController !== "undefined" ? AbortController : null;
+		if (!AC && typeof window !== "undefined" && window.AbortController) {
+			AC = window.AbortController;
+		}
+		if (!AC && typeof globalThis !== "undefined" && globalThis.AbortController) {
+			AC = globalThis.AbortController;
+		}
+		if (!AC) {
+			let win = (typeof Zotero !== "undefined" && (Zotero.getMainWindow?.() || Zotero.getMainWindows?.()?.[0]))
+				|| (typeof Services !== "undefined" && (Services.wm?.getMostRecentWindow?.("navigator:browser") || Services.wm?.getMostRecentWindow?.(null)));
+			if (win && win.AbortController) {
+				AC = win.AbortController;
+			}
+		}
+		if (AC) {
+			return new AC();
+		}
+		return {
+			signal: { aborted: false, addEventListener() {}, removeEventListener() {} },
+			abort() { this.signal.aborted = true; }
+		};
+	},
+
 	$(id) {
 		return document.getElementById(id);
 	},
@@ -207,7 +231,7 @@ var ZoteroMineruPreferences = {
 			]
 		};
 
-		let controller = new AbortController();
+		let controller = this.createAbortController();
 		let timeoutID = setTimeout(() => controller.abort(), settings.timeoutMS);
 		try {
 			this.setStatus("正在测试 MinerU 连接...");
@@ -278,7 +302,7 @@ var ZoteroMineruPreferences = {
 	},
 
 	async sendLLMTestRequest({ endpoint, apiKey, payload, timeoutMS = 30000 }) {
-		let controller = new AbortController();
+		let controller = this.createAbortController();
 		let timeoutID = setTimeout(() => controller.abort(), timeoutMS);
 		try {
 			let response = await fetch(endpoint, {

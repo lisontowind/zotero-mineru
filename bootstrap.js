@@ -4,12 +4,25 @@ function log(msg) {
 	Zotero.debug("Zotero MinerU: " + msg);
 }
 
+function ensureAbortController(win) {
+	if (typeof AbortController === "undefined") {
+		let targetWin = win || (typeof Zotero !== "undefined" && (Zotero.getMainWindow?.() || Zotero.getMainWindows?.()?.[0]))
+			|| (typeof Services !== "undefined" && (Services.wm?.getMostRecentWindow?.("navigator:browser") || Services.wm?.getMostRecentWindow?.(null)));
+		if (targetWin && targetWin.AbortController) {
+			try {
+				globalThis.AbortController = targetWin.AbortController;
+			} catch (_) {}
+		}
+	}
+}
+
 function install() {
-	log("Installed 0.1.38");
+	log("Installed");
 }
 
 async function startup({ id, version, rootURI }) {
-	log("Starting 0.1.38");
+	log("Starting " + version);
+	ensureAbortController();
 	
 	try {
 		let prefPaneCandidates = [
@@ -63,6 +76,7 @@ async function startup({ id, version, rootURI }) {
 }
 
 function onMainWindowLoad({ window }) {
+	ensureAbortController(window);
 	ZoteroMineru.addToWindow(window);
 }
 
@@ -71,11 +85,11 @@ function onMainWindowUnload({ window }) {
 }
 
 function shutdown() {
-	log("Shutting down 0.1.38");
+	log("Shutting down");
 	ZoteroMineru.removeFromAllWindows();
 	ZoteroMineru = undefined;
 }
 
 function uninstall() {
-	log("Uninstalled 0.1.38");
+	log("Uninstalled");
 }
