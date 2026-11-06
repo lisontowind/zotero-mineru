@@ -226,7 +226,8 @@ Parent Item (论文条目)
 - bootstrap 和核心脚本从 Zotero 主窗口补齐缺失的 AbortController / Headers；设置页亦可从窗口获取原生控制器。无法创建原生 AbortController 时，在发出请求前明确报错，禁止以空事件监听的模拟 signal 代替。设置页的 MinerU 测试同样显示此错误。
 - MinerU 单次网络请求使用 `timeoutSec`；轮询请求与等待受剩余总时限约束。下载的每个候选地址各有一次请求时限。
 - 总结、翻译及设置页 LLM 测试均校验完成状态：OpenAI finish_reason、Gemini finishReason 和 Ollama done_reason 支持大小写规范化，只接受 stop / end_turn / stop_sequence；length / MAX_TOKENS、安全过滤及 done=false 均拒绝。普通 JSON 仍兼容未提供完成原因的服务。Gemini 多个正文 part 合并，thought part 不保存。
-- LLM URL 可填写 Base URL 或完整 /chat/completions 地址；请求默认 stream=false，接受 JSON、带 BOM / 外层代码围栏的 JSON，以及网关返回的 OpenAI 风格 SSE。SSE 按事件合并 data 行，要求明确 finish_reason 或 [DONE]，损坏事件、错误事件和结束后追加数据均报错，禁止把残缺内容当作完整结果。忽略其他 choice 与 usage 事件；正文中的 think 块被移除。
+- LLM URL 可填写 Base URL 或完整 /chat/completions 地址；仅规范化 URL pathname，保留查询参数和 fragment，设置读取层不得裁剪查询参数值末尾的斜杠。总结、翻译和设置页连接测试共用相同的地址处理规则。
+- 请求默认 stream=false，接受 JSON、带 BOM / 外层代码围栏的 JSON，以及网关返回的 OpenAI 风格 SSE。SSE 按事件合并 data 行，要求明确 finish_reason 或 [DONE]，损坏事件、错误事件和结束后追加数据均报错，禁止把残缺内容当作完整结果。忽略其他 choice 与 usage 事件；只移除响应开头连续成对的 think 推理前缀，保留正文、Markdown 代码和 JSON 字符串内部的字面标签。
 - 截断译文进入现有分段重试和部分保存流程，截断内容本身不作为成功分块保留；不声称能检测模型未报告的内容遗漏。
 
 ### 图片隔离与文字批量翻译
@@ -235,7 +236,7 @@ Parent Item (论文条目)
 - 无图片分块直接请求和返回 Markdown；含图片分块把文字片段作为 JSON 字符串数组一次发送，要求返回同序同数量的 Markdown 字符串数组。
 - 一个分块内有多张图也只发一次请求；纯图片分块直接原样返回，不调用模型。
 - 返回数组格式、数量和非空字符串校验通过后，在本地按原位置插回图片；校验失败走现有重试流程。
-- 批量译文先直接解析完整 JSON，再兼容说明文字或外层代码围栏中的平衡数组；JSON 字符串内部的代码围栏、引号、反斜杠和方括号属于译文，不能截取为包装。
+- 批量译文先直接解析完整 JSON；有说明文字或外层代码围栏时，单次扫描并只接受唯一完整的外层 JSON 数组。多个有效数组、未闭合数组或只能从损坏外层提取的嵌套数组均拒绝并进入现有重试流程，禁止把示例或说明标签当作译文。JSON 字符串内部的代码围栏、think 标签、引号、反斜杠和方括号属于译文，必须保留。
 - 图片引用、内部标识和 Base64 均不应出现在模型输入中；禁止回到要求模型原样保留图片标识的方案。
 - Markdown 译文拥有自己的 images 文件夹，不依赖原解析附件的 storage 路径；HTML 译文固定内嵌图片，保存为单文件且不另存译文 Markdown。
 - 双栏 HTML 使用同一批翻译结果本地渲染，按翻译分块对照，不增加 HTML 生成请求。

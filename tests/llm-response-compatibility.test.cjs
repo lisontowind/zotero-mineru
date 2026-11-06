@@ -6,20 +6,24 @@ const {test} = require('node:test');
 
 const settings = {apiBaseURL:'https://llm.example/v1',apiKey:'TEST',model:'test'};
 function harness(body) {
+  const requests=[];
   const context = {
     URL, Headers, AbortController, Uint8Array, setTimeout, clearTimeout,
     Zotero: {locale:'en-US',debug() {},logError() {}},
-    fetch: async () => ({
-      ok:true,status:200,
-      text:async()=>typeof body === 'string' ? body : JSON.stringify(body),
-      json:async()=>body
-    })
+    fetch: async (url,options) => {
+      requests.push({url,options});
+      return {
+        ok:true,status:200,
+        text:async()=>typeof body === 'string' ? body : JSON.stringify(body),
+        json:async()=>body
+      };
+    }
   };
   vm.createContext(context);
   for (const file of ['mineru.js','preferences.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),context);
   }
-  return {m:context.ZoteroMineru,p:context.ZoteroMineruPreferences};
+  return {context,requests,m:context.ZoteroMineru,p:context.ZoteroMineruPreferences};
 }
 function operations(h) {
   return [
@@ -112,4 +116,116 @@ test('connection test accepts valid JSON whose reply contains HTML markup',async
   for(const run of operations(harness({choices:[{finish_reason:'stop',message:{content}}]}))) {
     assert.equal(await run(),content);
   }
+});
+
+test('literal think elements survive in inline code, fenced code and ordinary prose',async () => {
+  for(const content of [
+    'Example: `<think>literal paper content</think>`.',
+    'Example XML:\n```xml\n<think>literal paper content</think>\n```\nEnd.',
+    'The paper discusses <think>literal content</think> in its method.'
+  ]) {
+    for(const run of operations(harness({choices:[{finish_reason:'stop',message:{content}}]}))) {
+      assert.equal(await run(),content);
+    }
+  }
+});
+
+test('leading thinking is removed without deleting literal examples in the final answer',async () => {
+  const final='Example: `<think>literal content</think>`.';
+  const content=' \n<think>reasoning</think>\n<think>more reasoning</think>\n'+final;
+  for(const run of operations(harness({choices:[{finish_reason:'stop',message:{content}}]}))) {
+    assert.equal(await run(),final);
+  }
+});
+
+test('reasoning-only replies are rejected instead of saved as complete output',async () => {
+  for(const run of operations(harness({choices:[{finish_reason:'stop',message:{content:'<think>reasoning only</think>'}}]}))) {
+    await assert.rejects(run(),/empty|为空/);
+  }
+});
+
+test('batch translation preserves think tags inside JSON string values',async () => {
+  const marker='zotero-mineru-image://img-1';
+  const source='Before\n\n![Figure]('+marker+')\n\nAfter';
+  const translated=['First <think>literal content</think> end','Second'];
+  for(const prefix of ['', '<think>actual reasoning</think>\n']) {
+    const content=prefix+JSON.stringify(translated);
+    const {m}=harness({choices:[{finish_reason:'stop',message:{content}}]});
+    const result=await m.callLLMForTranslation(source,'English',settings,1,1);
+    assert(result.includes(translated[0]));
+    assert(result.includes(translated[1]));
+    assert(result.includes(marker));
+  }
+});
+
+test('ambiguous translation arrays are rejected so labels cannot become saved translations',async () => {
+  const source='Before\n\n![Figure](zotero-mineru-image://img-1)\n\nAfter';
+  for(const content of [
+    'The labels ["left", "right"] correspond to these fragments: ["译文一", "译文二"].',
+    '```json\n["example one","example two"]\n```\n```json\n["译文一","译文二"]\n```'
+  ]) {
+    const {m}=harness({choices:[{finish_reason:'stop',message:{content}}]});
+    await assert.rejects(m.callLLMForTranslation(source,'中文',settings,1,1),/格式无效/);
+  }
+});
+
+test('a malformed enclosing array cannot be replaced with a valid nested array',async () => {
+  const content='Result: [invalid, ["wrong one","wrong two"]]';
+  const {m}=harness({choices:[{finish_reason:'stop',message:{content}}]});
+  await assert.rejects(m.callLLMForTranslation('Before\n\n![Fig](zotero-mineru-image://img-1)\n\nAfter',
+    'English',settings,1,1),/格式无效/);
+});
+
+test('chat endpoint normalization preserves query parameters, fragments and slash-valued parameters',() => {
+  const cases=[
+    ['https://proxy.example/v1/chat/completions?api-version=test',
+      'https://proxy.example/v1/chat/completions?api-version=test'],
+    ['https://proxy.example/v1/?api-version=test&route=a%2Fb',
+      'https://proxy.example/v1/chat/completions?api-version=test&route=a%2Fb'],
+    ['https://proxy.example/v1/chat/completions/?route=https://upstream.example/',
+      'https://proxy.example/v1/chat/completions?route=https://upstream.example/'],
+    ['https://proxy.example/v1?api-version=test#section',
+      'https://proxy.example/v1/chat/completions?api-version=test#section']
+  ];
+  const {m,p}=harness({});
+  for(const obj of [m,p]) {
+    for(const [input,expected] of cases) assert.equal(obj.buildLLMURL(input),expected);
+  }
+});
+
+test('LLM settings readers preserve trailing slashes belonging to query parameter values',() => {
+  const endpoint='https://proxy.example/v1/chat/completions?route=https://upstream.example/';
+  const h=harness({});
+  // Both VM objects share the same mocked Zotero preference store.
+  const prefs=new Map([
+    ['extensions.zotero-mineru.llmApiBaseURL',endpoint],
+    ['extensions.zotero-mineru.llmApiKey','TEST'],
+    ['extensions.zotero-mineru.llmModel','test']
+  ]);
+  h.context.Zotero.Prefs={get:key=>prefs.get(key)};
+  assert.equal(h.m.getLLMSettings().apiBaseURL,endpoint);
+  assert.equal(h.p.readLLMSettings().apiBaseURL,endpoint);
+});
+
+test('summary, translation and both connection checks send to the correctly normalized URL',async () => {
+  const base='https://proxy.example/v1/?api-version=test&route=https://upstream.example/';
+  const expected='https://proxy.example/v1/chat/completions?api-version=test&route=https://upstream.example/';
+  const h=harness({choices:[{finish_reason:'stop',message:{content:'OK'}}]});
+  const prefs=new Map([
+    ['extensions.zotero-mineru.llmApiBaseURL',base],
+    ['extensions.zotero-mineru.llmApiKey','TEST'],
+    ['extensions.zotero-mineru.llmModel','test']
+  ]);
+  h.context.Zotero.Prefs={get:key=>prefs.get(key)};
+  const llm=h.m.getLLMSettings();
+  assert.equal(await h.m.callLLMForSummary('Paper',llm,'English'),'OK');
+  assert.equal(await h.m.callLLMForTranslation('Paper','English',llm,1,1),'OK');
+  h.p.saveSettings=()=>true;
+  h.p.setOutput=()=>{};
+  let status;
+  h.p.setStatus=message=>{status=message;};
+  await h.p.testLLMConnection();
+  assert.match(status,/succeeded/);
+  assert.equal(h.requests.length,4);
+  assert(h.requests.every(request=>request.url===expected));
 });

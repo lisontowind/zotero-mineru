@@ -2648,12 +2648,15 @@ ZoteroMineru = {
 	},
 
 	buildLLMURL(apiBaseURL) {
-		let clean = String(apiBaseURL || "").trim().replace(/\/+$/, "");
+		let clean = String(apiBaseURL || "").trim();
 		if (!clean) return "";
-		if (/\/chat\/completions$/i.test(clean)) {
-			return clean;
+		let url = new URL(clean);
+		let path = url.pathname.replace(/\/+$/, "");
+		if (!/\/chat\/completions$/i.test(path)) {
+			path += "/chat/completions";
 		}
-		return `${clean}/chat/completions`;
+		url.pathname = path;
+		return url.href;
 	},
 
 	parseSSEResponse(text) {
@@ -2788,7 +2791,9 @@ ZoteroMineru = {
 			}
 		}
 		if (typeof content === "string") {
-			content = content.replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+			// Only a leading reasoning prefix is metadata. Tags inside prose,
+			// Markdown code or JSON strings belong to the document.
+			content = content.trim().replace(/^(?:<think>[\s\S]*?<\/think>\s*)+/i, "").trim();
 		}
 		if (typeof content !== "string" || !content.trim()) {
 			let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
@@ -3113,7 +3118,6 @@ ZoteroMineru = {
 
 	getLLMSettings() {
 		let apiBaseURL = (Zotero.Prefs.get(this.PREF_BRANCH + "llmApiBaseURL", true) || "").trim();
-		apiBaseURL = apiBaseURL.replace(/\/+$/, "");
 		let apiKey = (Zotero.Prefs.get(this.PREF_BRANCH + "llmApiKey", true) || "").trim();
 		apiKey = apiKey.replace(/^Bearer\s+/i, "");
 		let model = (Zotero.Prefs.get(this.PREF_BRANCH + "llmModel", true) || "").trim();
@@ -3938,27 +3942,41 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 		let text = content.trim();
 		try { return JSON.parse(text); }
 		catch (_) {}
-		// Locate a balanced JSON array in conversational/fenced output. Brackets
-		// and Markdown code fences inside JSON strings are document content.
-		for (let start = text.indexOf("["); start !== -1; start = text.indexOf("[", start + 1)) {
-			let depth = 0, quoted = false, escaped = false;
-			for (let end = start; end < text.length; end++) {
-				let char = text[end];
-				if (quoted) {
-					if (escaped) escaped = false;
-					else if (char === "\\") escaped = true;
-					else if (char === '"') quoted = false;
-					continue;
+		// Accept one complete outer array in conversational/fenced output.
+		// Never guess between examples and translations, or extract a nested
+		// array from malformed enclosing JSON. Scan once, respecting strings.
+		let start = -1, depth = 0, quoted = false, escaped = false;
+		let found = false, translated;
+		for (let end = 0; end < text.length; end++) {
+			let char = text[end];
+			if (start === -1) {
+				if (char === "[") {
+					start = end;
+					depth = 1;
 				}
-				if (char === '"') quoted = true;
-				else if (char === "[") depth++;
-				else if (char === "]" && --depth === 0) {
-					try { return JSON.parse(text.slice(start, end + 1)); }
-					catch (_) { break; }
-				}
+				continue;
+			}
+			if (quoted) {
+				if (escaped) escaped = false;
+				else if (char === "\\") escaped = true;
+				else if (char === '"') quoted = false;
+				continue;
+			}
+			if (char === '"') quoted = true;
+			else if (char === "[") depth++;
+			else if (char === "]" && --depth === 0) {
+				let candidate = text.slice(start, end + 1);
+				start = -1;
+				let parsed;
+				try { parsed = JSON.parse(candidate); }
+				catch (_) { continue; }
+				if (found) throw new Error("Ambiguous translation JSON arrays");
+				translated = parsed;
+				found = true;
 			}
 		}
-		throw new Error("Invalid translation JSON array");
+		if (!found || start !== -1) throw new Error("Invalid translation JSON array");
+		return translated;
 	},
 
 	async callLLMForTranslation(text, language, llmSettings, chunkIndex, totalChunks) {

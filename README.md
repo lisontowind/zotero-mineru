@@ -16,7 +16,7 @@ A Zotero 8/9/10 plugin that sends PDF attachments to the MinerU API, saves parse
 - Image references stay local during translation. Text fragments around images are batched within each chunk, then images are restored in their original positions. Fragment count mismatches trigger retries; image markers are never sent to the model.
 - Translate long documents with chunking, bounded concurrency, automatic retry, and retry-failed-chunks confirmation.
 - Translation retries use exponential backoff and consider Retry-After. Permanent errors such as invalid credentials are not automatically retried. Summary and translation reject responses explicitly reported as truncated or incomplete.
-- Accept JSON or gateway SSE replies, including BOM and outer JSON code fences. Interrupted or malformed streams and native response truncation signals are rejected. Code blocks inside JSON translation fragments are preserved.
+- Accept JSON or gateway SSE replies, including BOM and outer JSON code fences. Interrupted or malformed streams and native response truncation signals are rejected. Code blocks and literal think tags inside translation fragments are preserved; ambiguous replies containing multiple JSON arrays trigger retries.
 - Save translations as Markdown (default, with an images folder) or standalone HTML (embedded images). The model only translates Markdown; HTML is rendered locally. HTML supports bilingual columns. Markdown contains only the translation, while the bilingual preference is retained.
 - After failures, retry failed chunks, save completed translations, or discard. Partial output displays completion counts and preserves untranslated source text with a label (bilingual HTML labels the translation column). Partial attachments use `#MinerU-Translation-Partial` and do not block another translation. Cross-task resume is not supported.
 - Existing files remain unchanged; Markdown attachments from released v0.1.58 remain supported.
@@ -70,6 +70,8 @@ Open `Edit -> Preferences -> MinerU` and configure the following as needed:
 `Summary Extra JSON Params` is merged directly into the summary request body as a JSON object. Use it for model-specific flags such as `{"enable_thinking": true}`. `model` and `messages` are reserved and cannot be overridden there.
 
 `Translate Extra JSON Params` is merged directly into the translation request body as a JSON object. Use it for model-specific flags such as `{"enable_thinking": true}`. `model` and `messages` are reserved and cannot be overridden there.
+
+`LLM API Base URL` accepts a base address or a complete `/chat/completions` URL. Query parameters are preserved in both production requests and connection tests.
 
 ## Usage
 

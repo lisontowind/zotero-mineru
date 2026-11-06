@@ -312,7 +312,6 @@ var ZoteroMineruPreferences = {
 
 	readLLMSettings() {
 		let apiBaseURL = (Zotero.Prefs.get(this.PREF_BRANCH + "llmApiBaseURL", true) || "").trim();
-		apiBaseURL = apiBaseURL.replace(/\/+$/, "");
 		let apiKey = (Zotero.Prefs.get(this.PREF_BRANCH + "llmApiKey", true) || "").trim();
 		apiKey = apiKey.replace(/^Bearer\s+/i, "");
 		let model = (Zotero.Prefs.get(this.PREF_BRANCH + "llmModel", true) || "").trim();
@@ -322,12 +321,15 @@ var ZoteroMineruPreferences = {
 	},
 
 	buildLLMURL(apiBaseURL) {
-		let clean = String(apiBaseURL || "").trim().replace(/\/+$/, "");
+		let clean = String(apiBaseURL || "").trim();
 		if (!clean) return "";
-		if (/\/chat\/completions$/i.test(clean)) {
-			return clean;
+		let url = new URL(clean);
+		let path = url.pathname.replace(/\/+$/, "");
+		if (!/\/chat\/completions$/i.test(path)) {
+			path += "/chat/completions";
 		}
-		return `${clean}/chat/completions`;
+		url.pathname = path;
+		return url.href;
 	},
 
 	parseSSEResponse(text) {
@@ -419,7 +421,9 @@ var ZoteroMineruPreferences = {
 			}
 		}
 		if (typeof content === "string") {
-			content = content.replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+			// Only a leading reasoning prefix is metadata. Tags inside prose,
+			// Markdown code or JSON strings belong to the document.
+			content = content.trim().replace(/^(?:<think>[\s\S]*?<\/think>\s*)+/i, "").trim();
 		}
 		if (typeof content !== "string" || !content.trim()) {
 			let isEn = typeof this.isEnglishLocale === "function" && this.isEnglishLocale();
