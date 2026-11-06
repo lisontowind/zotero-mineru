@@ -22,6 +22,18 @@ ZoteroMineru = {
 		this.initialized = true;
 	},
 	
+	isEnglishLocale() {
+		try {
+			let loc = (typeof Zotero !== "undefined" && Zotero.locale)
+				|| (typeof Services !== "undefined" && Services.locale?.appLocaleAsBCP47)
+				|| "";
+			if (!loc) return false;
+			return !loc.toLowerCase().startsWith("zh");
+		} catch (_) {
+			return false;
+		}
+	},
+
 	log(msg) {
 		Zotero.debug("Zotero MinerU: " + msg);
 	},
@@ -38,38 +50,39 @@ ZoteroMineru = {
 	},
 
 	getContextMenuDefinitions() {
+		let isEn = this.isEnglishLocale();
 		return [
 			{
 				id: this.CONTEXT_MENU_ID,
-				label: "使用 MinerU 解析 PDF 并保存为附件",
+				label: isEn ? "Parse PDF with MinerU and Save as Attachment" : "使用 MinerU 解析 PDF 并保存为附件",
 				l10nID: "zotero-mineru-menu-parse-pdf",
 				getTasks: (selectedItems) => this.getAvailableTasks("parse", this.collectPDFTasks(selectedItems)),
 				run: ({ window, selectedItems }) => this.handleParseCommand({ window, selectedItems }),
-				errorPrefix: "执行失败"
+				errorPrefix: isEn ? "Execution failed" : "执行失败"
 			},
 			{
 				id: this.MARKDOWN_NOTE_MENU_ID,
-				label: "将 MinerU 解析附件转为笔记",
+				label: isEn ? "Convert MinerU Document to Note" : "将 MinerU 解析附件转为笔记",
 				l10nID: "zotero-mineru-menu-markdown-to-note",
 				getTasks: (selectedItems) => this.getAvailableTasks("note", this.collectMarkdownToNoteTasks(selectedItems)),
 				run: ({ window, selectedItems }) => this.handleMarkdownToNoteCommand({ window, selectedItems }),
-				errorPrefix: "转笔记失败"
+				errorPrefix: isEn ? "Convert to note failed" : "转笔记失败"
 			},
 			{
 				id: this.SUMMARY_MENU_ID,
-				label: "使用 AI 总结文献",
+				label: isEn ? "Summarize with AI" : "使用 AI 总结文献",
 				l10nID: "zotero-mineru-menu-ai-summary",
 				getTasks: (selectedItems) => this.getAvailableTasks("summary", this.collectSummaryTasks(selectedItems)),
 				run: ({ window, selectedItems }) => this.handleSummaryCommand({ window, selectedItems }),
-				errorPrefix: "AI 总结失败"
+				errorPrefix: isEn ? "AI summary failed" : "AI 总结失败"
 			},
 			{
 				id: this.TRANSLATE_MENU_ID,
-				label: "使用 AI 翻译文献",
+				label: isEn ? "Translate with AI" : "使用 AI 翻译文献",
 				l10nID: "zotero-mineru-menu-ai-translate",
 				getTasks: (selectedItems) => this.getAvailableTasks("translate", this.collectTranslateTasks(selectedItems)),
 				run: ({ window, selectedItems }) => this.handleTranslateCommand({ window, selectedItems }),
-				errorPrefix: "AI 翻译失败"
+				errorPrefix: isEn ? "AI translation failed" : "AI 翻译失败"
 			}
 		];
 	},
@@ -467,9 +480,10 @@ ZoteroMineru = {
 	},
 
 	async handleParseCommand({ window = null, selectedItems = null } = {}) {
+		let isEn = this.isEnglishLocale();
 		let settings = this.getSettings();
 		if (!settings.apiToken) {
-			this.showAlert(window, "MinerU", "请先在设置中填写 MinerU 官方 API Token。");
+			this.showAlert(window, "MinerU", isEn ? "Please configure the MinerU API Token in preferences first." : "请先在设置中填写 MinerU 官方 API Token。");
 			return;
 		}
 		
@@ -478,7 +492,7 @@ ZoteroMineru = {
 			|| [];
 		let tasks = this.collectPDFTasks(items);
 		if (!tasks.length) {
-			this.showAlert(window, "MinerU", "当前选择里没有可解析的 PDF 附件。");
+			this.showAlert(window, "MinerU", isEn ? "No parseable PDF attachment in the current selection." : "当前选择里没有可解析的 PDF 附件。");
 			return;
 		}
 		return this.runTaskBatch("parse", tasks, window, (available, skipped) =>
@@ -486,10 +500,11 @@ ZoteroMineru = {
 	},
 
 	async runParseTasks({ window, tasks, settings, skipped = 0 }) {
+		let isEn = this.isEnglishLocale();
 		let progress = new Zotero.ProgressWindow({ closeOnClick: true });
-		progress.changeHeadline("MinerU PDF 解析");
+		progress.changeHeadline(isEn ? "MinerU PDF Parsing" : "MinerU PDF 解析");
 		progress.show();
-		if (skipped) progress.addDescription(`跳过 ${skipped} 项重复或正在进行的任务`);
+		if (skipped) progress.addDescription(isEn ? `Skipped ${skipped} duplicate or active tasks` : `跳过 ${skipped} 项重复或正在进行的任务`);
 		
 		let successes = 0;
 		let failures = [];
@@ -512,19 +527,19 @@ ZoteroMineru = {
 			};
 			try {
 				updateItemStatus({
-					text: "准备解析",
+					text: isEn ? "Preparing parse" : "准备解析",
 					percent: 5
 				});
 					let parsedResult = await this.parseAttachmentWithMineru(task.attachment, settings, {
 						onStatus: (statusInfo) => {
 							updateItemStatus({
-								text: statusInfo?.displayText || statusInfo?.phase || "处理中",
+								text: statusInfo?.displayText || statusInfo?.phase || (isEn ? "Processing" : "处理中"),
 								percent: statusInfo?.progress ?? null
 							});
 					}
 				});
 				updateItemStatus({
-					text: "保存解析附件",
+					text: isEn ? "Saving attachment" : "保存解析附件",
 					percent: 85
 				});
 					let savedResult = await this.saveResultAsMarkdownAttachment({
@@ -535,27 +550,27 @@ ZoteroMineru = {
 					});
 				if (savedResult?.warning) warnings.push(`${title}: ${savedResult.warning}`);
 				updateItemStatus({
-					text: savedResult?.warning || "完成",
+					text: savedResult?.warning || (isEn ? "Done" : "完成"),
 					percent: 100
 				});
 				successes++;
 			}
 			catch (e) {
-				updateItemStatus({ text: "失败" });
+				updateItemStatus({ text: isEn ? "Failed" : "失败" });
 				itemProgress.setError();
 				failures.push(`${title}: ${e.message || e}`);
 				Zotero.logError(e);
 			}
 		}
 		
-		progress.addDescription(`完成 ${successes}/${tasks.length}`);
+		progress.addDescription(isEn ? `Completed ${successes}/${tasks.length}` : `完成 ${successes}/${tasks.length}`);
 		progress.startCloseTimer(5000);
 		
 		if (warnings.length) {
-			this.showAlert(window, "MinerU 关联提醒", warnings.join("\n"));
+			this.showAlert(window, isEn ? "MinerU Link Notice" : "MinerU 关联提醒", warnings.join("\n"));
 		}
 		if (failures.length) {
-			this.showAlert(window, "MinerU 部分失败", failures.slice(0, 10).join("\n"));
+			this.showAlert(window, isEn ? "MinerU Partial Failure" : "MinerU 部分失败", failures.slice(0, 10).join("\n"));
 		}
 	},
 	
@@ -571,24 +586,46 @@ ZoteroMineru = {
 		});
 	},
 
+	getPhaseText(phase) {
+		if (!this.isEnglishLocale()) return phase;
+		const map = {
+			"准备解析": "Preparing parse",
+			"读取本地 PDF": "Reading local PDF",
+			"申请上传地址": "Requesting upload URL",
+			"上传 PDF": "Uploading PDF",
+			"等待 MinerU 解析": "Waiting for MinerU parsing",
+			"下载解析结果": "Downloading parsed results",
+			"提取 Markdown": "Extracting Markdown",
+			"提取完成": "Extraction complete",
+			"保存解析附件": "Saving attachment",
+			"完成": "Done",
+			"失败": "Failed",
+			"处理中": "Processing",
+			"跳过": "Skipped"
+		};
+		return map[phase] || phase;
+	},
+
 	describeParseStatus(statusContext) {
 		if (!statusContext) return "";
-		let phase = (statusContext.phase || "").trim();
+		let isEn = this.isEnglishLocale();
+		let rawPhase = (statusContext.phase || "").trim();
+		let phase = this.getPhaseText(rawPhase);
 		let mineruState = (statusContext.mineruState || "").trim();
 		if (phase && mineruState) {
-			return `${phase}，MinerU 状态: ${mineruState}`;
+			return isEn ? `${phase}, MinerU status: ${mineruState}` : `${phase}，MinerU 状态: ${mineruState}`;
 		}
 		if (phase) {
 			return phase;
 		}
 		if (mineruState) {
-			return `MinerU 状态: ${mineruState}`;
+			return isEn ? `MinerU status: ${mineruState}` : `MinerU 状态: ${mineruState}`;
 		}
 		return "";
 	},
 
 	wrapErrorWithParseStatus(error, statusContext) {
-		if (error instanceof Error && error.message.includes("当前状态:")) {
+		if (error instanceof Error && (error.message.includes("当前状态:") || error.message.includes("Current status:"))) {
 			return error;
 		}
 		let baseMessage = error instanceof Error ? error.message : String(error);
@@ -596,7 +633,8 @@ ZoteroMineru = {
 		if (!statusText) {
 			return error instanceof Error ? error : new Error(baseMessage);
 		}
-		let wrapped = new Error(`${baseMessage}（当前状态: ${statusText}）`);
+		let isEn = this.isEnglishLocale();
+		let wrapped = new Error(isEn ? `${baseMessage} (Current status: ${statusText})` : `${baseMessage}（当前状态: ${statusText}）`);
 		wrapped.cause = error;
 		return wrapped;
 	},
@@ -2617,13 +2655,19 @@ ZoteroMineru = {
 	},
 
 	confirmRetryFailedChunks(window, { title, failures, autoRetryCount, completed = 0, total = failures.length }) {
+		let isEn = this.isEnglishLocale();
 		let prompt = Services.prompt;
 		let flags = prompt.BUTTON_POS_0 * prompt.BUTTON_TITLE_IS_STRING |
 			prompt.BUTTON_POS_1 * prompt.BUTTON_TITLE_IS_STRING;
 		if (completed) flags |= prompt.BUTTON_POS_2 * prompt.BUTTON_TITLE_IS_STRING;
-		let result = prompt.confirmEx(window || null, "AI 翻译部分失败",
-			`${title}\n已完成 ${completed}/${total} 段，失败 ${failures.length} 段（已自动重试 ${autoRetryCount} 次）。\n\n${this.buildFailedChunkSummary(failures, 8)}`,
-			flags, "重试失败段落", "放弃", completed ? "保存已完成译文" : null, null, {});
+		let dialogTitle = isEn ? "AI Translation Partial Failure" : "AI 翻译部分失败";
+		let dialogMessage = isEn
+			? `${title}\nCompleted ${completed}/${total} sections, failed ${failures.length} sections (${autoRetryCount} auto-retries attempted).\n\n${this.buildFailedChunkSummary(failures, 8)}`
+			: `${title}\n已完成 ${completed}/${total} 段，失败 ${failures.length} 段（已自动重试 ${autoRetryCount} 次）。\n\n${this.buildFailedChunkSummary(failures, 8)}`;
+		let btn0 = isEn ? "Retry Failed Sections" : "重试失败段落";
+		let btn1 = isEn ? "Discard" : "放弃";
+		let btn2 = completed ? (isEn ? "Save Completed Translation" : "保存已完成译文") : null;
+		let result = prompt.confirmEx(window || null, dialogTitle, dialogMessage, flags, btn0, btn1, btn2, null, {});
 		return result === 0 ? "retry" : result === 2 && completed ? "save" : "discard";
 	},
 
@@ -2992,55 +3036,59 @@ ZoteroMineru = {
 	},
 
 	async handleMarkdownToNoteCommand({ window = null, selectedItems = null } = {}) {
-		let settings = this.getSettings()
+		let isEn = this.isEnglishLocale();
+		let settings = this.getSettings();
 		let items = selectedItems
 			|| window?.ZoteroPane?.getSelectedItems?.()
-			|| []
-		let tasks = this.collectMarkdownToNoteTasks(items)
+			|| [];
+		let tasks = this.collectMarkdownToNoteTasks(items);
 		if (!tasks.length) {
-			this.showAlert(window, "MinerU", "当前选择里没有可转为笔记的 MinerU 解析附件。\n（已有 #MinerU-Parse 笔记的条目会被跳过）")
-			return
+			this.showAlert(window, "MinerU", isEn
+				? "No MinerU parsed attachments found in current selection to convert to note.\n(Items with existing #MinerU-Parse note will be skipped)"
+				: "当前选择里没有可转为笔记的 MinerU 解析附件。\n（已有 #MinerU-Parse 笔记的条目会被跳过）");
+			return;
 		}
 		return this.runTaskBatch("note", tasks, window, (available, skipped) =>
 			this.runMarkdownToNoteTasks({ window, tasks: available, settings, skipped }));
 	},
 
 	async runMarkdownToNoteTasks({ window, tasks, settings, skipped = 0 }) {
+		let isEn = this.isEnglishLocale();
 		let shouldContinue = this.showConfirm(
 			window,
-			"MinerU 解析附件转笔记",
-			"提示：如果笔记过长，可能会导致同步失败。\n\n是否继续转化为笔记？"
-		)
+			isEn ? "Convert MinerU Attachment to Note" : "MinerU 解析附件转笔记",
+			isEn ? "Note: If the note is very long, it may cause sync issues.\n\nContinue converting to note?" : "提示：如果笔记过长，可能会导致同步失败。\n\n是否继续转化为笔记？"
+		);
 		if (!shouldContinue) {
-			return
+			return;
 		}
 
-		let progress = new Zotero.ProgressWindow({ closeOnClick: true })
-		progress.changeHeadline("MinerU 解析附件转笔记")
-		progress.show()
-		if (skipped) progress.addDescription(`跳过 ${skipped} 项重复或正在进行的任务`);
+		let progress = new Zotero.ProgressWindow({ closeOnClick: true });
+		progress.changeHeadline(isEn ? "Convert MinerU Attachment to Note" : "MinerU 解析附件转笔记");
+		progress.show();
+		if (skipped) progress.addDescription(isEn ? `Skipped ${skipped} duplicate or active tasks` : `跳过 ${skipped} 项重复或正在进行的任务`);
 
-		let successes = 0
-		let failures = []
+		let successes = 0;
+		let failures = [];
 
 		for (let task of tasks) {
 			let title = task.parentItem?.getField("title")
 				|| task.sourceAttachment.getField("title")
-				|| "未知文献"
+				|| (isEn ? "Unknown literature" : "未知文献");
 			let itemProgress = new progress.ItemProgress(
 				"chrome://zotero/skin/treeitem-note.png",
 				title
-			)
+			);
 			try {
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（读取解析附件）`)
+					itemProgress.setText(`${title}（${isEn ? "Reading attachment" : "读取解析附件"}）`);
 				}
 				let parsedResult = await this.buildParsedResultFromMarkdownAttachment(task.sourceAttachment, {
 					includeImages: settings.noteIncludeImages
-				})
+				});
 
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（保存笔记）`)
+					itemProgress.setText(`${title}（${isEn ? "Saving note" : "保存笔记"}）`);
 				}
 				await this.saveResultAsNote({
 					attachment: task.sourceAttachment,
@@ -3048,42 +3096,45 @@ ZoteroMineru = {
 					parsedResult,
 					settings,
 					sourceTitle: this.normalizeMarkdownAttachmentTitle(task.sourceAttachment)
-				})
+				});
 
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（完成）`)
+					itemProgress.setText(`${title}（${isEn ? "Done" : "完成"}）`);
 				}
-				itemProgress.setProgress(100)
-				successes++
+				itemProgress.setProgress(100);
+				successes++;
 			}
 			catch (e) {
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（失败）`)
+					itemProgress.setText(`${title}（${isEn ? "Failed" : "失败"}）`);
 				}
-				itemProgress.setError()
-				failures.push(`${title}: ${e.message || e}`)
-				Zotero.logError(e)
+				itemProgress.setError();
+				failures.push(`${title}: ${e.message || e}`);
+				Zotero.logError(e);
 			}
 		}
 
-		progress.addDescription(`完成 ${successes}/${tasks.length}`)
-		progress.startCloseTimer(5000)
+		progress.addDescription(isEn ? `Completed ${successes}/${tasks.length}` : `完成 ${successes}/${tasks.length}`);
+		progress.startCloseTimer(5000);
 
 		if (failures.length) {
-			this.showAlert(window, "MinerU 转笔记部分失败", failures.slice(0, 10).join("\n"))
+			this.showAlert(window, isEn ? "MinerU Note Conversion Partial Failure" : "MinerU 转笔记部分失败", failures.slice(0, 10).join("\n"));
 		}
 	},
 
 	async handleSummaryCommand({ window = null, selectedItems = null } = {}) {
+		let isEn = this.isEnglishLocale();
 		let llmSettings = this.getLLMSettings();
 		if (!llmSettings.apiBaseURL || !llmSettings.apiKey || !llmSettings.model) {
-			this.showAlert(window, "MinerU", "请先在设置中填写完整的 LLM API 信息（Base URL、API Key、模型名称）。");
+			this.showAlert(window, "MinerU", isEn
+				? "Please enter complete LLM API settings in preferences (Base URL, API Key, Model Name)."
+				: "请先在设置中填写完整的 LLM API 信息（Base URL、API Key、模型名称）。");
 			return;
 		}
 		try {
 			llmSettings.summaryRequestParams = this.parseOptionalJSONObject(
 				llmSettings.summaryRequestJSON,
-				"总结额外 JSON 参数"
+				isEn ? "Summary extra JSON parameters" : "总结额外 JSON 参数"
 			);
 		} catch (e) {
 			this.showAlert(window, "MinerU", e.message || String(e));
@@ -3095,7 +3146,9 @@ ZoteroMineru = {
 			|| [];
 		let tasks = this.collectSummaryTasks(items);
 		if (!tasks.length) {
-			this.showAlert(window, "MinerU", "当前选择的条目没有带 #MinerU-Parse 标签的解析结果，请先使用 MinerU 解析 PDF。");
+			this.showAlert(window, "MinerU", isEn
+				? "Selected items do not have #MinerU-Parse attachment for summary. Please parse with MinerU first."
+				: "当前选择的条目没有带 #MinerU-Parse 标签的解析结果，请先使用 MinerU 解析 PDF。");
 			return;
 		}
 		return this.runTaskBatch("summary", tasks, window, (available, skipped) =>
@@ -3103,39 +3156,40 @@ ZoteroMineru = {
 	},
 
 	async runSummaryTasks({ window, tasks, llmSettings, skipped = 0 }) {
+		let isEn = this.isEnglishLocale();
 		let progress = new Zotero.ProgressWindow({ closeOnClick: true });
-		progress.changeHeadline("AI 文献总结");
+		progress.changeHeadline(isEn ? "AI Literature Summary" : "AI 文献总结");
 		progress.show();
-		if (skipped) progress.addDescription(`跳过 ${skipped} 项重复或正在进行的任务`);
+		if (skipped) progress.addDescription(isEn ? `Skipped ${skipped} duplicate or active tasks` : `跳过 ${skipped} 项重复或正在进行的任务`);
 
 		let successes = 0;
 		let failures = [];
 
 		for (let task of tasks) {
-			let title = task.parentItem.getField("title") || "未知文献";
+			let title = task.parentItem.getField("title") || (isEn ? "Unknown literature" : "未知文献");
 			let itemProgress = new progress.ItemProgress(
 				"chrome://zotero/skin/treeitem-note.png",
 				title
 			);
 			try {
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（提取文本）`);
+					itemProgress.setText(`${title}（${isEn ? "Extracting text" : "提取文本"}）`);
 				}
 				let source = await this.readSourceMarkdown(task.mineruSource);
 				let plainText = this.removeLocalImageReferences(source.markdown);
 				if (!plainText.trim()) {
-					throw new Error("MinerU 解析内容为空");
+					throw new Error(isEn ? "MinerU parsed content is empty" : "MinerU 解析内容为空");
 				}
 
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（调用 LLM）`);
+					itemProgress.setText(`${title}（${isEn ? "Calling LLM" : "调用 LLM"}）`);
 				}
 				let summary = await this.summarizeFullDocument(plainText, llmSettings, llmSettings.summaryLanguage, (text) => {
 					if (typeof itemProgress.setText === "function") itemProgress.setText(`${title}（${text}）`);
 				});
 
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（保存笔记）`);
+					itemProgress.setText(`${title}（${isEn ? "Saving note" : "保存笔记"}）`);
 				}
 				await this.saveSummaryAsNote({
 					parentItem: task.parentItem,
@@ -3143,13 +3197,13 @@ ZoteroMineru = {
 				});
 
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（完成）`);
+					itemProgress.setText(`${title}（${isEn ? "Done" : "完成"}）`);
 				}
 				itemProgress.setProgress(100);
 				successes++;
 			} catch (e) {
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（失败）`);
+					itemProgress.setText(`${title}（${isEn ? "Failed" : "失败"}）`);
 				}
 				itemProgress.setError();
 				failures.push(`${title}: ${e.message || e}`);
@@ -3157,11 +3211,11 @@ ZoteroMineru = {
 			}
 		}
 
-		progress.addDescription(`完成 ${successes}/${tasks.length}`);
+		progress.addDescription(isEn ? `Completed ${successes}/${tasks.length}` : `完成 ${successes}/${tasks.length}`);
 		progress.startCloseTimer(5000);
 
 		if (failures.length) {
-			this.showAlert(window, "AI 总结部分失败", failures.slice(0, 10).join("\n"));
+			this.showAlert(window, isEn ? "AI Summary Partial Failure" : "AI 总结部分失败", failures.slice(0, 10).join("\n"));
 		}
 	},
 
@@ -3369,80 +3423,90 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 	},
 
 	async handleTranslateCommand({ window = null, selectedItems = null } = {}) {
-		let llmSettings = this.getLLMSettings()
+		let isEn = this.isEnglishLocale();
+		let llmSettings = this.getLLMSettings();
 		if (!llmSettings.apiBaseURL || !llmSettings.apiKey || !llmSettings.model) {
-			this.showAlert(window, "MinerU", "请先在设置中填写完整的 LLM API 信息（Base URL、API Key、模型名称）。")
-			return
+			this.showAlert(window, "MinerU", isEn
+				? "Please enter complete LLM API settings in preferences (Base URL, API Key, Model Name)."
+				: "请先在设置中填写完整的 LLM API 信息（Base URL、API Key、模型名称）。");
+			return;
 		}
 		try {
 			llmSettings.translateRequestParams = this.parseOptionalJSONObject(
 				llmSettings.translateRequestJSON,
-				"翻译额外 JSON 参数"
-			)
+				isEn ? "Translation extra JSON parameters" : "翻译额外 JSON 参数"
+			);
 		} catch (e) {
-			this.showAlert(window, "MinerU", e.message || String(e))
-			return
+			this.showAlert(window, "MinerU", e.message || String(e));
+			return;
 		}
 
 		let items = selectedItems
 			|| window?.ZoteroPane?.getSelectedItems?.()
-			|| []
-		let tasks = this.collectTranslateTasks(items)
+			|| [];
+		let tasks = this.collectTranslateTasks(items);
 		if (!tasks.length) {
-			this.showAlert(window, "MinerU", "当前选择的条目没有可翻译的 MinerU 解析结果，请先使用 MinerU 解析 PDF。\n（已有翻译结果的条目会被跳过）")
-			return
+			this.showAlert(window, "MinerU", isEn
+				? "Selected items do not have parse results to translate. Please parse PDF with MinerU first.\n(Items with existing translation will be skipped)"
+				: "当前选择的条目没有可翻译的 MinerU 解析结果，请先使用 MinerU 解析 PDF。\n（已有翻译结果的条目会被跳过）");
+			return;
 		}
 		return this.runTaskBatch("translate", tasks, window, (available, skipped) =>
 			this.runTranslateTasks({ window, tasks: available, llmSettings, skipped }));
 	},
 
 	async runTranslateTasks({ window, tasks, llmSettings, skipped = 0 }) {
-		let language = llmSettings.translateLanguage || "中文"
-		let chunkSize = llmSettings.translateChunkSize || 20000
-		let translateConcurrency = llmSettings.translateConcurrency || 3
-		let translateRetryCount = llmSettings.translateRetryCount || 2
+		let isEn = this.isEnglishLocale();
+		let language = llmSettings.translateLanguage || (isEn ? "English" : "中文");
+		let chunkSize = llmSettings.translateChunkSize || 20000;
+		let translateConcurrency = llmSettings.translateConcurrency || 3;
+		let translateRetryCount = llmSettings.translateRetryCount || 2;
 
-		let progress = new Zotero.ProgressWindow({ closeOnClick: true })
-		progress.changeHeadline(`AI 文献翻译 → ${language}`)
-		progress.show()
-		if (skipped) progress.addDescription(`跳过 ${skipped} 项重复或正在进行的任务`);
+		let progress = new Zotero.ProgressWindow({ closeOnClick: true });
+		progress.changeHeadline(isEn ? `AI Literature Translation → ${language}` : `AI 文献翻译 → ${language}`);
+		progress.show();
+		if (skipped) progress.addDescription(isEn ? `Skipped ${skipped} duplicate or active tasks` : `跳过 ${skipped} 项重复或正在进行的任务`);
 
-		let partialSaves = 0
-		let successes = 0
-		let failures = []
+		let partialSaves = 0;
+		let successes = 0;
+		let failures = [];
 
 		for (let task of tasks) {
-			let title = task.parentItem.getField("title") || "未知文献"
+			let title = task.parentItem.getField("title") || (isEn ? "Unknown literature" : "未知文献");
 			let itemProgress = new progress.ItemProgress(
 				"chrome://zotero/skin/treeitem-note.png",
 				title
-			)
+			);
 			try {
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（提取文本）`)
+					itemProgress.setText(`${title}（${isEn ? "Extracting text" : "提取文本"}）`);
 				}
 				let { filePath, markdown: sourceMarkdown } = await this.readSourceMarkdown(task.mineruSource);
-				if (typeof itemProgress.setText === "function") itemProgress.setText(`${title}（读取 Markdown：${this.fileNameFromPath(filePath)}）`);
-				let sourceDocument = await this.inlineStoredImagesInMarkdownAttachment({ markdownText: sourceMarkdown, markdownPath: filePath })
-				let fullText = sourceDocument.markdownText
+				if (typeof itemProgress.setText === "function") {
+					itemProgress.setText(`${title}（${isEn ? "Reading Markdown: " : "读取 Markdown："}${this.fileNameFromPath(filePath)}）`);
+				}
+				let sourceDocument = await this.inlineStoredImagesInMarkdownAttachment({ markdownText: sourceMarkdown, markdownPath: filePath });
+				let fullText = sourceDocument.markdownText;
 				if (!fullText.trim()) {
-					throw new Error("MinerU 解析内容为空")
+					throw new Error(isEn ? "MinerU parsed content is empty" : "MinerU 解析内容为空");
 				}
 
 				// Split into chunks for translation
-				let bilingual = llmSettings.outputFormat === "html" && llmSettings.translationMode === "bilingual"
+				let bilingual = llmSettings.outputFormat === "html" && llmSettings.translationMode === "bilingual";
 				// Output layout must not change request size or multiply translation calls.
-				let chunks = this.splitMarkdownIntoChunks(fullText, chunkSize)
-				let translatedParts = new Array(chunks.length).fill(null)
-				let activeConcurrency = Math.min(translateConcurrency, chunks.length)
-				let pendingChunkIndexes = chunks.map((_chunk, index) => index)
-				let retryRound = 0
-				let savePartial = false
+				let chunks = this.splitMarkdownIntoChunks(fullText, chunkSize);
+				let translatedParts = new Array(chunks.length).fill(null);
+				let activeConcurrency = Math.min(translateConcurrency, chunks.length);
+				let pendingChunkIndexes = chunks.map((_chunk, index) => index);
+				let retryRound = 0;
+				let savePartial = false;
 
 				while (pendingChunkIndexes.length) {
-					let batchLabel = retryRound ? `重试第 ${retryRound} 轮` : "翻译"
+					let batchLabel = retryRound
+						? (isEn ? `Retry round ${retryRound}` : `重试第 ${retryRound} 轮`)
+						: (isEn ? "Translating" : "翻译");
 					if (typeof itemProgress.setText === "function") {
-						itemProgress.setText(`${title}（${batchLabel} 0/${pendingChunkIndexes.length}，并发 ${activeConcurrency}）`)
+						itemProgress.setText(`${title}（${batchLabel} 0/${pendingChunkIndexes.length}，${isEn ? "concurrency" : "并发"} ${activeConcurrency}）`);
 					}
 					let batchResult = await this.translateChunksWithConcurrency({
 						chunks,
@@ -3450,28 +3514,30 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 						concurrency: activeConcurrency,
 						autoRetryCount: translateRetryCount,
 						translateChunk: (chunk, chunkIndex, totalChunks) => {
-							return this.callLLMForTranslation(chunk, language, llmSettings, chunkIndex + 1, totalChunks)
+							return this.callLLMForTranslation(chunk, language, llmSettings, chunkIndex + 1, totalChunks);
 						},
 						onProgress: ({ completed, total }) => {
-							let progressLabel = retryRound ? `重试第 ${retryRound} 轮` : "翻译"
+							let progressLabel = retryRound
+								? (isEn ? `Retry round ${retryRound}` : `重试第 ${retryRound} 轮`)
+								: (isEn ? "Translating" : "翻译");
 							if (typeof itemProgress.setText === "function") {
-								itemProgress.setText(`${title}（${progressLabel} ${completed}/${total}，并发 ${activeConcurrency}）`)
+								itemProgress.setText(`${title}（${progressLabel} ${completed}/${total}，${isEn ? "concurrency" : "并发"} ${activeConcurrency}）`);
 							}
 						}
-					})
+					});
 
 					for (let [chunkIndex, translated] of batchResult.successes.entries()) {
-						translatedParts[chunkIndex] = translated
+						translatedParts[chunkIndex] = translated;
 					}
 
 					if (!batchResult.failures.length) {
-						break
+						break;
 					}
 
 					if (typeof itemProgress.setText === "function") {
-						itemProgress.setText(`${title}（等待确认重试失败段落）`)
+						itemProgress.setText(`${title}（${isEn ? "Awaiting retry confirmation for failed sections" : "等待确认重试失败段落"}）`);
 					}
-					retryRound++
+					retryRound++;
 					let failureAction = this.confirmRetryFailedChunks(window, {
 						title,
 						failures: batchResult.failures,
@@ -3479,32 +3545,35 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 						autoRetryCount: translateRetryCount,
 						completed: translatedParts.filter(part => typeof part === "string" && part.trim()).length,
 						total: chunks.length
-					})
-					if (failureAction === "save") { savePartial = true; break }
+					});
+					if (failureAction === "save") { savePartial = true; break; }
 					if (failureAction !== "retry") {
-						throw new Error(this.buildFailedChunkSummary(batchResult.failures, 10) || "部分段落翻译失败")
+						throw new Error(this.buildFailedChunkSummary(batchResult.failures, 10) || (isEn ? "Some sections failed to translate" : "部分段落翻译失败"));
 					}
-					pendingChunkIndexes = batchResult.failures.map((failure) => failure.chunkIndex)
+					pendingChunkIndexes = batchResult.failures.map((failure) => failure.chunkIndex);
 					if (typeof itemProgress.setText === "function") {
-						itemProgress.setText(`${title}（准备重试失败段落 ${pendingChunkIndexes.length} 段）`)
+						itemProgress.setText(`${title}（${isEn ? `Preparing retry for ${pendingChunkIndexes.length} sections` : `准备重试失败段落 ${pendingChunkIndexes.length} 段`}）`);
 					}
 				}
 
 				if (!savePartial && translatedParts.some((part) => typeof part !== "string" || !part.trim())) {
 					let missingChunks = translatedParts
-						.map((part, index) => (typeof part === "string" && part.trim()) ? null : `第 ${index + 1}/${translatedParts.length} 段`)
-						.filter(Boolean)
-					throw new Error(`仍有未完成段落，无法合成结果：${missingChunks.slice(0, 10).join("，")}`)
+						.map((part, index) => (typeof part === "string" && part.trim()) ? null : (isEn ? `Section ${index + 1}/${translatedParts.length}` : `第 ${index + 1}/${translatedParts.length} 段`))
+						.filter(Boolean);
+					throw new Error(isEn
+						? `Unfinished sections remain, cannot synthesize result: ${missingChunks.slice(0, 10).join(", ")}`
+						: `仍有未完成段落，无法合成结果：${missingChunks.slice(0, 10).join("，")}`);
 				}
 
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（合成翻译结果）`)
+					itemProgress.setText(`${title}（${isEn ? "Synthesizing translation" : "合成翻译结果"}）`);
 				}
-				let completed = translatedParts.filter(part => typeof part === "string" && part.trim()).length
-				let translatedText = chunks.map((source, i) => translatedParts[i] || `> 未翻译\n\n${source}`).join("\n\n")
+				let completed = translatedParts.filter(part => typeof part === "string" && part.trim()).length;
+				let untranslatedTag = isEn ? "> Untranslated\n\n" : "> 未翻译\n\n";
+				let translatedText = chunks.map((source, i) => translatedParts[i] || `${untranslatedTag}${source}`).join("\n\n");
 
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（保存附件）`)
+					itemProgress.setText(`${title}（${isEn ? "Saving attachment" : "保存附件"}）`);
 				}
 				await this.saveTranslationAsMarkdownAttachment({
 					parentItem: task.parentItem,
@@ -3512,34 +3581,36 @@ Ensure the summary is accurate, concise, and faithful to the original content. D
 					translatedText,
 					images: sourceDocument.embeddedImages,
 					settings: llmSettings,
-					pairs: bilingual ? chunks.map((source, i) => ({ id: `block-${i + 1}`, source, translated: translatedParts[i] || "**未翻译**" })) : null,
+					pairs: bilingual ? chunks.map((source, i) => ({ id: `block-${i + 1}`, source, translated: translatedParts[i] || (isEn ? "**Untranslated**" : "**未翻译**") })) : null,
 					language,
 					partial: savePartial ? { completed, total: chunks.length } : null
-				})
+				});
 
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（${savePartial ? "已保存部分译文" : "完成"}）`)
+					itemProgress.setText(`${title}（${savePartial ? (isEn ? "Partial translation saved" : "已保存部分译文") : (isEn ? "Done" : "完成")}）`);
 				}
-				itemProgress.setProgress(100)
-				if (savePartial) partialSaves++; else successes++
+				itemProgress.setProgress(100);
+				if (savePartial) partialSaves++; else successes++;
 			} catch (e) {
 				if (typeof itemProgress.setText === "function") {
-					itemProgress.setText(`${title}（${this.isTimeoutError(e) ? "超时" : "失败"}）`)
+					itemProgress.setText(`${title}（${this.isTimeoutError(e) ? (isEn ? "Timeout" : "超时") : (isEn ? "Failed" : "失败")}）`);
 				}
-				itemProgress.setError()
-				failures.push(`${title}: ${this.formatUserFacingError(e, "翻译失败")}`)
-				Zotero.logError(e)
+				itemProgress.setError();
+				failures.push(`${title}: ${this.formatUserFacingError(e, isEn ? "Translation failed" : "翻译失败")}`);
+				Zotero.logError(e);
 			}
 		}
 
-		progress.addDescription(`完成 ${successes}/${tasks.length}，部分保存 ${partialSaves}/${tasks.length}`)
+		progress.addDescription(isEn
+			? `Completed ${successes}/${tasks.length}, partially saved ${partialSaves}/${tasks.length}`
+			: `完成 ${successes}/${tasks.length}，部分保存 ${partialSaves}/${tasks.length}`);
 		if (failures.length) {
-			progress.addDescription(`失败 ${failures.length}/${tasks.length}`)
+			progress.addDescription(isEn ? `Failed ${failures.length}/${tasks.length}` : `失败 ${failures.length}/${tasks.length}`);
 		}
-		progress.startCloseTimer(5000)
+		progress.startCloseTimer(5000);
 
 		if (failures.length) {
-			this.showAlert(window, "AI 翻译部分失败", failures.slice(0, 10).join("\n"))
+			this.showAlert(window, isEn ? "AI Translation Partial Failure" : "AI 翻译部分失败", failures.slice(0, 10).join("\n"));
 		}
 	},
 
