@@ -1,3 +1,24 @@
+if (typeof AbortController === "undefined") {
+	try {
+		let win = (typeof Zotero !== "undefined" && (Zotero.getMainWindow?.() || Zotero.getMainWindows?.()?.[0]))
+			|| (typeof Services !== "undefined" && (Services.wm?.getMostRecentWindow?.("navigator:browser") || Services.wm?.getMostRecentWindow?.(null)));
+		if (win && win.AbortController) {
+			globalThis.AbortController = win.AbortController;
+		}
+	}
+	catch (_) {}
+}
+if (typeof Headers === "undefined") {
+	try {
+		let win = (typeof Zotero !== "undefined" && (Zotero.getMainWindow?.() || Zotero.getMainWindows?.()?.[0]))
+			|| (typeof Services !== "undefined" && (Services.wm?.getMostRecentWindow?.("navigator:browser") || Services.wm?.getMostRecentWindow?.(null)));
+		if (win && win.Headers) {
+			globalThis.Headers = win.Headers;
+		}
+	}
+	catch (_) {}
+}
+
 ZoteroMineru = {
 	id: null,
 	version: null,
@@ -2515,14 +2536,55 @@ ZoteroMineru = {
 		return null;
 	},
 
+	getAbortControllerClass() {
+		if (typeof AbortController !== "undefined") {
+			return AbortController;
+		}
+		if (typeof globalThis !== "undefined" && globalThis.AbortController) {
+			return globalThis.AbortController;
+		}
+		let win = (typeof Zotero !== "undefined" && (Zotero.getMainWindow?.() || Zotero.getMainWindows?.()?.[0]))
+			|| (typeof Services !== "undefined" && (Services.wm?.getMostRecentWindow?.("navigator:browser") || Services.wm?.getMostRecentWindow?.(null)));
+		if (win && win.AbortController) {
+			try {
+				globalThis.AbortController = win.AbortController;
+			} catch (_) {}
+			return win.AbortController;
+		}
+		return null;
+	},
+
+	createAbortController() {
+		let Cls = this.getAbortControllerClass();
+		if (Cls) {
+			try {
+				return new Cls();
+			} catch (e) {
+				this.log(`Failed to create AbortController: ${e}`);
+			}
+		}
+		return {
+			signal: {
+				aborted: false,
+				addEventListener() {},
+				removeEventListener() {}
+			},
+			abort() {
+				this.signal.aborted = true;
+			}
+		};
+	},
+
 	async withRequestTimeout(taskFactory, timeoutMS = 120000, label = "网络请求") {
-		let controller = new AbortController();
+		let controller = this.createAbortController();
 		try {
 			// The callback must consume the response body before returning.
 			return await this.withTimeout(() => taskFactory(controller.signal), timeoutMS, label);
 		}
 		catch (error) {
-			controller.abort();
+			try {
+				controller.abort();
+			} catch (_) {}
 			throw error;
 		}
 	},
