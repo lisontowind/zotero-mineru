@@ -1,6 +1,6 @@
 # Zotero MinerU Plugin
 
-Zotero 8/9/10 插件，调用 MinerU 官方 API 解析 PDF，始终保存原始 Markdown，并支持可选 HTML、Markdown 转笔记、LLM 总结和翻译。本文描述 v0.1.72 的实现，包含英文界面与 LLM 响应兼容改进；版本号以 manifest.json 为准。
+Zotero 8/9/10 插件，调用 MinerU 官方 API 解析 PDF，始终保存原始 Markdown，并支持可选 HTML、Markdown 转笔记、LLM 总结和翻译。本文描述 v0.1.74 的实现，包含设置界面分区、可折叠高级参数与主题适配；版本号以 manifest.json 为准。
 
 ## 项目结构
 
@@ -290,7 +290,10 @@ Parent Item (论文条目)
 
 ## 设置面板
 
-preferences.xhtml 分两个区域：MinerU 设置 + LLM 设置，Grid 布局（170px 标签列）。
+- 设置按 PDF 解析、LLM 服务、AI 总结、AI 翻译四个卡片分区展示；请求与笔记设置、自定义总结 Prompt / JSON、翻译分段 / 并发 / JSON 收入原生 `details` 折叠区域。
+- 保留所有控件 ID 与偏好绑定，输入仍按原逻辑自动校验保存；显式保存遇到无效字段时自动展开所在区域、聚焦并滚动定位，全部校验通过前不写入任何偏好。
+- 操作栏在滚动时保持底部可见，空连接测试输出不占位；状态通过 `data-state` 区分成功和错误，颜色由样式表控制，兼容深色与高对比模式。
+- `preferences.css` 的样式限定在 MinerU 面板；容器宽度较小时表单切换为单列。新增界面文字需同步两种 Fluent 文件、XHTML 中文回退和 `applyLocalization()` 英文回退。
 
 设置及主要运行界面按 Zotero 语言切换中文或英文，非中文环境使用英文。设置文字通过 en-US / zh-CN Fluent 资源加载，并保留 JavaScript 英文回退；FTL 中的字面量 {{language}} 必须写成 `{ "{{language}}" }`，不能被解释为消息引用。总结和翻译语言菜单包含 Tiếng Việt。
 

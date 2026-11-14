@@ -1,65 +1,416 @@
 .mineru-pane {
-	padding: 16px;
-	max-width: 780px;
-	line-height: 1.45;
+	--mineru-accent: #1f5aa6;
+	--mineru-accent-hover: #194c8d;
+	--mineru-text: #242b36;
+	--mineru-muted: #626d7c;
+	--mineru-surface: #fff;
+	--mineru-subtle: #f5f7fa;
+	--mineru-border: #dfe3e9;
+	--mineru-input-border: #b9c2cf;
+	--mineru-focus: #dce9fa;
+	--mineru-success: #237344;
+	--mineru-error: #b03232;
+	box-sizing: border-box;
+	container: mineru-settings / inline-size;
+	width: 100%;
+	max-width: 840px;
+	min-width: 0;
+	padding: 20px 20px 12px;
+	color: var(--mineru-text);
+	line-height: 1.55;
+}
+
+.mineru-pane *,
+.mineru-pane *::before,
+.mineru-pane *::after {
+	box-sizing: border-box;
+}
+
+.mineru-header {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-bottom: 24px;
+}
+
+.mineru-mark {
+	display: grid;
+	flex: 0 0 44px;
+	place-items: center;
+	height: 44px;
+	border-radius: 12px;
+	background: var(--mineru-accent);
+	color: #fff;
+	font-size: 25px;
+	font-weight: 750;
+	line-height: 1;
 }
 
 .mineru-pane h2 {
-	margin: 0 0 12px;
+	margin: 0;
+	font-size: 1.6em;
+	font-weight: 650;
+	line-height: 1.3;
+}
+
+.mineru-subtitle {
+	margin: 5px 0 0;
+	color: var(--mineru-muted);
+	font-size: 0.95em;
+}
+
+.mineru-section {
+	min-width: 0;
+	margin-bottom: 16px;
+	padding: 20px;
+	border: 1px solid var(--mineru-border);
+	border-radius: 12px;
+	background: var(--mineru-surface);
+}
+
+.mineru-section-header {
+	margin-bottom: 18px;
+}
+
+.mineru-section h3 {
+	margin: 0;
+	font-size: 1.12em;
+	font-weight: 650;
+	line-height: 1.4;
+}
+
+.mineru-section-description {
+	margin: 4px 0 0;
+	color: var(--mineru-muted);
+	font-size: 0.92em;
 }
 
 .mineru-grid {
 	display: grid;
-	grid-template-columns: 170px 1fr;
-	gap: 10px 12px;
-	align-items: center;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	align-items: end;
+	gap: 16px;
 }
 
-.mineru-grid input,
-.mineru-grid textarea,
-.mineru-grid menulist {
+.mineru-grid-three {
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mineru-field {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	gap: 7px;
+}
+
+.mineru-field-wide {
+	grid-column: 1 / -1;
+}
+
+.mineru-field > label {
+	font-size: 0.95em;
+	font-weight: 500;
+}
+
+.mineru-pane input:not([type="checkbox"]),
+.mineru-pane textarea,
+.mineru-pane menulist {
 	width: 100%;
-	box-sizing: border-box;
+	min-width: 0;
+	min-height: 36px;
+	margin: 0;
+	padding: 7px 10px;
+	border: 1px solid var(--mineru-input-border);
+	border-radius: 6px;
+	background-color: var(--mineru-surface);
+	color: var(--mineru-text);
+	font: inherit;
+	line-height: 1.4;
 }
 
-.mineru-grid textarea {
+.mineru-pane menulist {
+	padding: 4px 8px;
+}
+
+.mineru-pane input::placeholder,
+.mineru-pane textarea::placeholder {
+	color: var(--mineru-muted);
+	opacity: 1;
+}
+
+.mineru-pane textarea {
+	min-height: 88px;
 	resize: vertical;
-	min-height: 84px;
+	line-height: 1.6;
+}
+
+.mineru-pane .mineru-code-input {
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+	font-size: 0.92em;
+	tab-size: 2;
+}
+
+.mineru-pane input:focus-visible,
+.mineru-pane textarea:focus-visible,
+.mineru-pane menulist:focus-visible,
+.mineru-pane button:focus-visible,
+.mineru-advanced > summary:focus-visible {
+	outline: 2px solid var(--mineru-accent);
+	outline-offset: 2px;
+}
+
+.mineru-pane input:not([type="checkbox"]):focus,
+.mineru-pane textarea:focus,
+.mineru-pane menulist:focus-within {
+	border-color: var(--mineru-accent);
+	box-shadow: 0 0 0 3px var(--mineru-focus);
+}
+
+.mineru-pane input:disabled,
+.mineru-pane menulist[disabled="true"],
+.mineru-pane menulist:disabled {
+	border-color: var(--mineru-border);
+	background-color: var(--mineru-subtle);
+	color: var(--mineru-muted);
+	opacity: 0.65;
+	cursor: not-allowed;
+}
+
+.mineru-options {
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+	margin-top: 20px;
+	padding-top: 20px;
+	border-top: 1px solid var(--mineru-border);
+}
+
+.mineru-option {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	cursor: pointer;
+}
+
+.mineru-pane input[type="checkbox"] {
+	flex: 0 0 16px;
+	width: 16px;
+	height: 16px;
+	margin: 3px 0 0;
+	accent-color: var(--mineru-accent);
+	cursor: pointer;
+}
+
+.mineru-option-copy {
+	min-width: 0;
+}
+
+.mineru-option-title {
+	display: block;
+	font-weight: 500;
 }
 
 .mineru-help {
-	margin: 12px 0 0;
-	color: #555;
-	font-size: 12px;
+	display: block;
+	margin: 0;
+	color: var(--mineru-muted);
+	font-size: 0.9em;
+	line-height: 1.65;
+	overflow-wrap: anywhere;
+}
+
+.mineru-option-copy .mineru-help {
+	margin-top: 5px;
+}
+
+.mineru-dependent-field {
+	margin-inline-start: 26px;
+}
+
+.mineru-advanced {
+	margin-top: 20px;
+	border-top: 1px solid var(--mineru-border);
+}
+
+.mineru-advanced > summary {
+	width: fit-content;
+	max-width: 100%;
+	padding: 14px 2px 0;
+	border-radius: 3px;
+	color: var(--mineru-muted);
+	font-size: 0.93em;
+	font-weight: 500;
+	cursor: pointer;
+}
+
+.mineru-advanced > summary:hover,
+.mineru-advanced[open] > summary {
+	color: var(--mineru-accent);
+}
+
+.mineru-advanced > .mineru-grid {
+	margin-top: 16px;
+}
+
+.mineru-footnote {
+	margin: 4px 2px 18px;
+	padding-inline-start: 12px;
+	border-inline-start: 3px solid var(--mineru-border);
 }
 
 .mineru-actions {
-	margin-top: 14px;
+	position: sticky;
+	z-index: 1;
+	bottom: 0;
+	margin-top: 16px;
+	padding: 14px;
+	border: 1px solid var(--mineru-border);
+	border-radius: 10px;
+	background: var(--mineru-surface);
+	box-shadow: 0 -4px 16px rgb(0 0 0 / 4%);
 }
 
-.mineru-actions button + button {
-	margin-left: 8px;
+.mineru-action-buttons {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.mineru-actions button {
+	min-height: 34px;
+	margin: 0;
+	padding: 7px 12px;
+	border: 1px solid var(--mineru-input-border);
+	border-radius: 6px;
+	background: var(--mineru-surface);
+	color: var(--mineru-text);
+	font: inherit;
+	font-size: 0.93em;
+	font-weight: 500;
+	line-height: 1.4;
+	cursor: pointer;
+}
+
+.mineru-actions button:hover {
+	border-color: var(--mineru-accent);
+	background: var(--mineru-subtle);
+}
+
+.mineru-actions .mineru-button-primary {
+	min-width: 72px;
+	border-color: var(--mineru-accent);
+	background: var(--mineru-accent);
+	color: #fff;
+}
+
+.mineru-actions .mineru-button-primary:hover {
+	border-color: var(--mineru-accent-hover);
+	background: var(--mineru-accent-hover);
 }
 
 #mineru-status {
-	margin-left: 10px;
-	font-size: 12px;
-	color: #1d6e36;
+	color: var(--mineru-success);
+	font-size: 0.92em;
+	overflow-wrap: anywhere;
 }
 
-[aria-invalid="true"] {
-	outline: 2px solid #b03232;
+#mineru-status:not(:empty) {
+	margin-top: 10px;
+}
+
+#mineru-status[data-state="error"] {
+	color: var(--mineru-error);
+}
+
+.mineru-pane [aria-invalid="true"] {
+	border-color: var(--mineru-error);
+	outline: 2px solid var(--mineru-error);
 	outline-offset: 1px;
 }
 
 .mineru-test-output {
-	margin: 12px 0 0;
-	padding: 10px;
-	background: #f7f7f8;
-	border: 1px solid #ddd;
-	border-radius: 4px;
+	max-height: 260px;
+	margin: 0;
+	padding: 14px;
+	overflow: auto;
+	border: 1px solid var(--mineru-border);
+	border-radius: 8px;
+	background: var(--mineru-subtle);
+	color: var(--mineru-text);
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+	font-size: 0.88em;
 	white-space: pre-wrap;
-	font-size: 12px;
-	color: #333;
-	min-height: 36px;
+	overflow-wrap: anywhere;
+}
+
+.mineru-test-output:empty {
+	display: none;
+}
+
+@container mineru-settings (max-width: 520px) {
+	.mineru-grid,
+	.mineru-grid-three {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.mineru-section {
+		padding: 16px;
+	}
+
+	.mineru-actions button {
+		flex: 1 1 auto;
+	}
+}
+
+@media (max-width: 600px) {
+	.mineru-pane {
+		padding: 12px 8px;
+	}
+
+	.mineru-grid,
+	.mineru-grid-three {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+@media (prefers-color-scheme: dark) {
+	.mineru-pane {
+		--mineru-accent: #83b4f4;
+		--mineru-accent-hover: #9cc5fa;
+		--mineru-text: #e5e9f0;
+		--mineru-muted: #abb5c4;
+		--mineru-surface: #25282e;
+		--mineru-subtle: #2c3038;
+		--mineru-border: #3d434e;
+		--mineru-input-border: #626d7e;
+		--mineru-focus: #32445d;
+		--mineru-success: #86d3a2;
+		--mineru-error: #ff9999;
+		color-scheme: dark;
+	}
+
+	.mineru-mark,
+	.mineru-actions .mineru-button-primary {
+		color: #142338;
+	}
+}
+
+@media (forced-colors: active) {
+	.mineru-pane {
+		--mineru-accent: Highlight;
+		--mineru-accent-hover: Highlight;
+		--mineru-text: CanvasText;
+		--mineru-muted: CanvasText;
+		--mineru-surface: Canvas;
+		--mineru-subtle: Canvas;
+		--mineru-border: ButtonBorder;
+		--mineru-input-border: ButtonBorder;
+		--mineru-success: CanvasText;
+		--mineru-error: LinkText;
+	}
+
+	.mineru-mark,
+	.mineru-actions .mineru-button-primary {
+		color: HighlightText;
+	}
 }

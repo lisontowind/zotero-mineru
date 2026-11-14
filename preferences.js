@@ -68,7 +68,7 @@ var ZoteroMineruPreferences = {
 		let status = this.$("mineru-status");
 		if (!status) return;
 		status.textContent = message || "";
-		status.style.color = isError ? "#b03232" : "#1d6e36";
+		status.setAttribute("data-state", isError ? "error" : "success");
 	},
 
 	parseOptionalJSONObject(rawValue, fieldLabel) {
@@ -134,8 +134,13 @@ var ZoteroMineruPreferences = {
 		let pending = [];
 		let invalid = (input, message) => {
 			input.setAttribute?.("aria-invalid", "true");
+			let details = input.closest?.("details");
+			if (details) details.open = true;
 			this.setStatus(message, true);
-			if (!silent) input.focus?.();
+			if (!silent) {
+				input.focus?.();
+				input.scrollIntoView?.({ block: "center" });
+			}
 			return false;
 		};
 		for (let field of this.FIELDS) {
@@ -641,6 +646,10 @@ var ZoteroMineruPreferences = {
 		if (!this.isEnglishLocale()) return;
 		const dict = {
 			"mineru-pref-title": "MinerU PDF Parsing Settings",
+			"mineru-pref-subtitle": "Configure PDF parsing, AI summaries, and translation.",
+			"mineru-pref-parse-heading": "PDF Parsing",
+			"mineru-pref-parse-description": "Connect to MinerU and choose how parsed attachments are saved.",
+			"mineru-pref-parse-advanced": "Request and note settings",
 			"mineru-pref-api-base-url": "API Base URL",
 			"mineru-pref-api-token": "API Token",
 			"mineru-pref-api-token-input": { placeholder: "Token generated from MinerU console" },
@@ -656,15 +665,22 @@ var ZoteroMineruPreferences = {
 			"mineru-pref-poll-interval-sec": "Polling Interval (seconds)",
 			"mineru-pref-timeout-sec": "Request Timeout (seconds)",
 			"mineru-pref-note-title-prefix": "Note Title Prefix",
-			"mineru-pref-llm-heading": "LLM Settings (AI Summary / Translation)",
+			"mineru-pref-llm-heading": "LLM Service",
+			"mineru-pref-llm-description": "AI summaries and translation share this service configuration.",
 			"mineru-pref-llm-api-base-url": "LLM API Base URL",
 			"mineru-pref-llm-api-key": "LLM API Key",
 			"mineru-pref-llm-model": "LLM Model Name",
+			"mineru-pref-summary-heading": "AI Summary",
+			"mineru-pref-summary-description": "Choose a summary language and optionally customize the prompt.",
+			"mineru-pref-summary-advanced": "Custom prompt and request parameters",
 			"mineru-pref-summary-language": "Summary Language",
 			"mineru-pref-summary-prompt": "AI Summary Prompt",
 			"mineru-pref-summary-prompt-textarea": { placeholder: "e.g. Please summarize the research problem, methodology, key findings, and limitations in {{language}}." },
 			"mineru-pref-summary-prompt-help": "Leave blank to use default summary prompt. Setting a prompt replaces the default system prompt. {{language}} will be replaced with the chosen summary language, and paper text is attached automatically. Clear and save to restore default.",
 			"mineru-pref-summary-request-json": "Summary Extra JSON Parameters",
+			"mineru-pref-translate-heading": "AI Translation",
+			"mineru-pref-translate-description": "Choose the target language, output format, and bilingual layout.",
+			"mineru-pref-translate-advanced": "Chunking, concurrency, and request parameters",
 			"mineru-pref-translate-output-format": "Translation Output Format",
 			"mineru-pref-translate-format-html": { label: "Standalone HTML" },
 			"mineru-pref-translate-mode": "Translation Mode",
@@ -678,6 +694,7 @@ var ZoteroMineruPreferences = {
 			"mineru-pref-save-button": "Save",
 			"mineru-pref-test-button": "Test MinerU Connection",
 			"mineru-pref-test-llm-button": "Test LLM Configuration",
+			"mineru-pref-test-output": { ariaLabel: "Connection test results" },
 			"mineru-pref-bottom-help": "Parsing and translation allow choosing Markdown / HTML and image storage independently. Bilingual side-by-side is only supported in HTML; switching to Markdown reverts to translation only. Embedded images in Markdown depend on reader support. Extracted images are located in the attachment's images folder; existing attachments are not automatically converted."
 		};
 		for (let [id, val] of Object.entries(dict)) {
@@ -687,6 +704,7 @@ var ZoteroMineruPreferences = {
 				el.textContent = val;
 			} else if (typeof val === "object") {
 				if (val.placeholder) el.placeholder = val.placeholder;
+				if (val.ariaLabel) el.setAttribute?.("aria-label", val.ariaLabel);
 				if (val.label) {
 					el.setAttribute?.("label", val.label);
 					if (el.label !== undefined) el.label = val.label;

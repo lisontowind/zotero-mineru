@@ -92,3 +92,24 @@ test('both connectivity tests stop when settings are invalid', async () => {
   await h.panel.testLLMConnection();
   assert.equal(h.writes.length, 0);
 });
+
+test('invalid advanced settings are expanded and brought into view on explicit save', () => {
+  const h = harness();
+  const input = h.inputs.get('mineru-summary-request-json');
+  const details = { open: false };
+  let scrolled = false;
+  input.value = '{';
+  input.closest = selector => {
+    assert.equal(selector, 'details');
+    return details;
+  };
+  input.scrollIntoView = options => {
+    assert.equal(options.block, 'center');
+    scrolled = true;
+  };
+  assert.equal(h.panel.saveSettings(), false);
+  assert.equal(details.open, true);
+  assert.equal(input.focused, true);
+  assert.equal(scrolled, true);
+  assert.equal(h.writes.length, 0);
+});

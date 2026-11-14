@@ -45,6 +45,8 @@ A Zotero 8/9/10 plugin that sends PDF attachments to the MinerU API, saves parse
 
 Open `Edit -> Preferences -> MinerU` and configure the following as needed:
 
+Settings are grouped into PDF Parsing, LLM Service, AI Summary, and AI Translation, with dark mode and a single-column layout for narrow windows. Expand the advanced sections for request and note settings, custom summary prompts and JSON, or translation chunking and concurrency. Save and connection-test buttons remain visible at the bottom; saving invalid settings expands and focuses the affected field.
+
 ### MinerU
 
 - `API Base URL`
