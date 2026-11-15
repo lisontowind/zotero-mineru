@@ -108,6 +108,58 @@ test('LLM response-body timeouts abort both summary and translation requests', {
   }
 });
 
+for (const modelVersion of ['pipeline', 'vlm']) {
+  for (const forceOCR of [undefined, false, true]) {
+    test(`${modelVersion} parsing sends per-file OCR=${String(forceOCR)} from preferences`, async () => {
+      const prefs = new Map([
+        ['extensions.zotero-mineru.apiBaseURL', settings.apiBaseURL],
+        ['extensions.zotero-mineru.apiToken', 'TEST'],
+        ['extensions.zotero-mineru.modelVersion', modelVersion]
+      ]);
+      if (forceOCR !== undefined) prefs.set('extensions.zotero-mineru.forceOCR', forceOCR);
+      const fileBytes = new Uint8Array([1, 2, 3]);
+      const { m, context, requests } = harness(async (url, options) => {
+        if (url === settings.apiBaseURL + '/file-urls/batch') {
+          assert.equal(options.method, 'POST');
+          return response(200, { code: 0, data: {
+            batch_id: 'batch', file_urls: ['https://upload.example/file']
+          } });
+        }
+        if (url === 'https://upload.example/file') return response(200, '');
+        if (url === settings.apiBaseURL + '/extract-results/batch/batch') {
+          return response(200, { code: 0, data: { extract_result: [
+            { state: 'done', full_zip_url: 'https://cdn.example/result.zip' }
+          ] } });
+        }
+        if (url === 'https://cdn.example/result.zip') return response();
+        throw Error('Unexpected request: ' + url);
+      });
+      context.Zotero.Prefs = { get: key => prefs.get(key) };
+      context.IOUtils = { read: async () => fileBytes };
+      const parsed = { markdownText: '# Parsed PDF' };
+      m.extractNoteContentFromMineruZip = async (bytes, fileName) => {
+        assert.equal(bytes.length, 2);
+        assert.equal(fileName, 'paper.pdf');
+        return parsed;
+      };
+
+      assert.equal(await m.parseAttachmentWithMineru(
+        { id: 1, getFilePath: () => '/paper.pdf' }, m.getSettings()
+      ), parsed);
+      assert.equal(requests.length, 4);
+      const payload = JSON.parse(requests[0].body);
+      assert.equal(payload.model_version, modelVersion);
+      assert.equal(payload.files.length, 1);
+      assert.equal(payload.files[0].name, 'paper.pdf');
+      assert.equal(payload.files[0].is_ocr, forceOCR === true);
+      assert.equal(typeof payload.files[0].is_ocr, 'boolean');
+      assert.equal(requests[1].method, 'PUT');
+      assert.equal(requests[1].body, fileBytes);
+      assert.equal(requests[1].headers, undefined);
+    });
+  }
+}
+
 test('PDF upload timeouts abort the upload and retain the parse phase', { timeout: 2000 }, async () => {
   const { m, context, requests } = harness(async (_url, options) => pendingUntilAborted(options.signal));
   context.IOUtils = { read: async () => new Uint8Array([1, 2, 3]) };

@@ -40,6 +40,13 @@
 				</html:div>
 			</html:div>
 			<html:div class="mineru-options">
+				<html:label class="mineru-option" for="mineru-force-ocr">
+					<html:input id="mineru-force-ocr" type="checkbox" aria-labelledby="mineru-force-ocr-label" aria-describedby="mineru-force-ocr-help" />
+					<html:span class="mineru-option-copy">
+						<html:span id="mineru-force-ocr-label" class="mineru-option-title" data-l10n-id="mineru-pref-force-ocr">强制 OCR</html:span>
+						<html:span id="mineru-force-ocr-help" class="mineru-help" data-l10n-id="mineru-pref-force-ocr-help">忽略 PDF 文字层，重新识别全部文字。适用于乱码、错误上下标等问题，可能增加解析耗时；仅影响后续解析。</html:span>
+					</html:span>
+				</html:label>
 				<html:label class="mineru-option" for="mineru-parseGenerateHTML">
 					<html:input id="mineru-parseGenerateHTML" type="checkbox" aria-labelledby="mineru-parse-html-label" aria-describedby="mineru-parse-markdown-help" />
 					<html:span class="mineru-option-copy">

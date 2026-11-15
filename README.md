@@ -7,6 +7,7 @@ A Zotero 8/9/10 plugin that sends PDF attachments to the MinerU API, saves parse
 ## Features
 
 - Parse selected PDF attachments with MinerU using `pipeline` or `vlm`.
+- Enable Force OCR to recognize all text again when a PDF text layer causes garbled text or incorrect subscripts and superscripts.
 - Use Chinese or English preferences and main workflow messages based on the Zotero UI language. Summary and translation languages include Vietnamese.
 - Parsing always saves Markdown with an `images/` folder. Optional HTML (off by default) becomes the main attachment, keeping Markdown alongside it. HTML can share the images folder or embed images.
 - Preserve extracted images under the parsed attachment's `images/` directory.
@@ -52,9 +53,12 @@ Settings are grouped into PDF Parsing, LLM Service, AI Summary, and AI Translati
 - `API Base URL`
 - `API Token`
 - `Model Version`
+- `Force OCR` (off by default)
 - `Poll Interval`
 - `Timeout`
 - `Note Title Prefix`
+
+Force OCR applies to future parses with either model and may take longer. Existing attachments are not changed. To reparse a document, remove its previous parsed attachments/notes or their `#MinerU-Parse` tags, then run parsing again.
 
 ### LLM
 

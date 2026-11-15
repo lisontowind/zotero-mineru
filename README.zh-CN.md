@@ -7,6 +7,7 @@
 ## 功能
 
 - 支持使用 `pipeline` 或 `vlm` 模型解析选中的 PDF 附件。
+- 可开启“强制 OCR”重新识别全部文字，适用于 PDF 文字层引起的乱码、错误上下标等问题。
 - 设置和主要运行提示按 Zotero 界面语言显示中文或英文；总结和翻译目标语言新增越南语。
 - 解析始终保存 Markdown 和 `images/`。可勾选“同时生成 HTML”（默认关闭），将 HTML 注册为主附件，同目录保留 Markdown；HTML 可共用图片文件夹或内嵌图片。
 - 保留 MinerU 解析出的图片，并保存到解析附件的 `images/` 目录。
@@ -52,9 +53,12 @@
 - `API Base URL`
 - `API Token`
 - `Model Version`
+- `强制 OCR`（默认关闭）
 - `Poll Interval`
 - `Timeout`
 - `Note Title Prefix`
+
+“强制 OCR”对两个模型的后续解析均生效，可能增加解析耗时，已有附件不会自动变化。重新解析时，请先删除旧解析附件/笔记，或移除它们的 `#MinerU-Parse` 标签，再执行解析。
 
 ### LLM 设置
 

@@ -25,14 +25,52 @@ function harness() {
   let status;
   panel.$ = id => inputs.get(id);
   panel.setStatus = (message, error) => { status = { message, error }; };
-  return { panel, inputs, prefs, writes, status: () => status };
+  return { panel, inputs, prefs, writes, context, status: () => status };
 }
+
+test('forced OCR defaults off, persists both states and is used by connectivity tests', async () => {
+  const h = harness();
+  for (const field of h.panel.FIELDS) {
+    if (field.type === 'int') h.prefs.set(h.panel.PREF_BRANCH + field.pref, field.min);
+  }
+  h.prefs.set(h.panel.PREF_BRANCH + 'apiToken', 'TEST');
+  const requests = [];
+  Object.assign(h.context, {
+    AbortController, setTimeout, clearTimeout,
+    fetch: async (url, options) => {
+      requests.push({ url, ...options });
+      return { ok: true, status: 200, text: async () => JSON.stringify({ code: 0 }) };
+    }
+  });
+  const input = h.inputs.get('mineru-force-ocr');
+  h.panel.loadSettings();
+  assert.equal(input.checked, false);
+  assert.equal(h.panel.readCurrentSettings().forceOCR, false);
+  for (const enabled of [true, false]) {
+    input.checked = enabled;
+    assert.equal(h.panel.saveSettings(), true);
+    assert.equal(h.prefs.get(h.panel.PREF_BRANCH + 'forceOCR'), enabled);
+    input.checked = !enabled;
+    h.panel.loadSettings();
+    assert.equal(input.checked, enabled);
+    assert.equal(h.panel.readCurrentSettings().forceOCR, enabled);
+
+    await h.panel.testConnection();
+    assert.equal(h.status().error, undefined);
+    const request = requests.at(-1);
+    assert.equal(request.method, 'POST');
+    assert.equal(request.url, 'https://mineru.net/api/v4/file-urls/batch');
+    assert.equal(JSON.parse(request.body).files[0].is_ocr, enabled);
+  }
+  assert.equal(requests.length, 2);
+});
 
 test('invalid later fields leave every preference unchanged, including booleans', () => {
   const h = harness();
   h.prefs.set(h.panel.PREF_BRANCH + 'apiBaseURL', 'https://old.example');
   h.inputs.get('mineru-api-base-url').value = 'https://new.example';
   h.inputs.get('mineru-parseGenerateHTML').checked = true;
+  h.inputs.get('mineru-force-ocr').checked = true;
   const invalid = h.inputs.get('mineru-translate-request-json');
   invalid.value = '{';
   assert.equal(h.panel.saveSettings(), false);
@@ -45,6 +83,7 @@ test('invalid later fields leave every preference unchanged, including booleans'
   assert.equal(h.panel.saveSettings({ silent: true }), true);
   assert.equal(h.prefs.get(h.panel.PREF_BRANCH + 'apiBaseURL'), 'https://new.example');
   assert.equal(h.prefs.get(h.panel.PREF_BRANCH + 'parseGenerateHTML'), true);
+  assert.equal(h.prefs.get(h.panel.PREF_BRANCH + 'forceOCR'), true);
   assert.equal(invalid.attributes.has('aria-invalid'), false);
   assert.equal(h.status().message, '');
 });

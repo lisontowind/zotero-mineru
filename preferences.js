@@ -11,6 +11,7 @@ var ZoteroMineruPreferences = {
 		{ id: "mineru-api-base-url", pref: "apiBaseURL", type: "string" },
 		{ id: "mineru-api-token", pref: "apiToken", type: "string" },
 		{ id: "mineru-model-version", pref: "modelVersion", type: "string" },
+		{ id: "mineru-force-ocr", pref: "forceOCR", type: "bool", defaultValue: false },
 		{ id: "mineru-note-include-images", pref: "noteIncludeImages", type: "bool" },
 		{ id: "mineru-poll-interval-sec", pref: "pollIntervalSec", type: "int", min: 1, max: 60, label: "轮询间隔", labelEn: "Polling interval" },
 		{ id: "mineru-timeout-sec", pref: "timeoutSec", type: "int", min: 5, max: 3600, label: "请求超时", labelEn: "Request timeout" },
@@ -227,7 +228,8 @@ var ZoteroMineruPreferences = {
 			apiBaseURL,
 			apiToken,
 			timeoutMS: timeoutSec * 1000,
-			modelVersion
+			modelVersion,
+			forceOCR: !!Zotero.Prefs.get(this.PREF_BRANCH + "forceOCR", true)
 		};
 	},
 
@@ -246,7 +248,8 @@ var ZoteroMineruPreferences = {
 			files: [
 				{
 					name: "connectivity-test.pdf",
-					data_id: "zotero-connect-test-" + Date.now()
+					data_id: "zotero-connect-test-" + Date.now(),
+					is_ocr: settings.forceOCR
 				}
 			]
 		};
@@ -654,6 +657,8 @@ var ZoteroMineruPreferences = {
 			"mineru-pref-api-token": "API Token",
 			"mineru-pref-api-token-input": { placeholder: "Token generated from MinerU console" },
 			"mineru-pref-model-version": "Model Version",
+			"mineru-pref-force-ocr": "Force OCR",
+			"mineru-pref-force-ocr-help": "Ignore the PDF text layer and recognize all text again. Useful for garbled text or incorrect subscripts and superscripts; may take longer. Applies to future parses.",
 			"mineru-pref-parse-generate-html": "Also generate HTML (always keep Markdown)",
 			"mineru-pref-parse-markdown-help": "Original Markdown is always saved in the attachment directory. When unchecked, Markdown is displayed directly as the main Zotero attachment. When HTML is checked, HTML is the main attachment; right-click and open the enclosing folder to view the .md file. AI summary and translation always use the original Markdown.",
 			"mineru-pref-parse-image-mode": "HTML Image Storage",

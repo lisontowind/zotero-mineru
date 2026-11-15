@@ -348,6 +348,7 @@ ZoteroMineru = {
 			apiBaseURL,
 			apiToken,
 			modelVersion,
+			forceOCR: !!Zotero.Prefs.get(this.PREF_BRANCH + "forceOCR", true),
 			pollIntervalMS: pollIntervalSec * 1000,
 			timeoutMS: timeoutSec * 1000,
 			noteTitlePrefix: (Zotero.Prefs.get(this.PREF_BRANCH + "noteTitlePrefix", true) || "MinerU Parse").trim(),
@@ -688,7 +689,8 @@ ZoteroMineru = {
 				files: [
 					{
 						name: fileName,
-						data_id: dataID
+						data_id: dataID,
+						is_ocr: !!settings.forceOCR
 					}
 				]
 			};

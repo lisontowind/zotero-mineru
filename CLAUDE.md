@@ -1,6 +1,6 @@
 # Zotero MinerU Plugin
 
-Zotero 8/9/10 插件，调用 MinerU 官方 API 解析 PDF，始终保存原始 Markdown，并支持可选 HTML、Markdown 转笔记、LLM 总结和翻译。本文描述 v0.1.74 的实现，包含设置界面分区、可折叠高级参数与主题适配；版本号以 manifest.json 为准。
+Zotero 8/9/10 插件，调用 MinerU 官方 API 解析 PDF，始终保存原始 Markdown，并支持可选 HTML、Markdown 转笔记、LLM 总结和翻译。本文描述 v0.1.75 的实现，包含强制 OCR、设置界面分区、可折叠高级参数与主题适配；版本号以 manifest.json 为准。
 
 ## 项目结构
 
@@ -54,6 +54,13 @@ bash build-xpi.sh
 3. 确认输出的 `.xpi` 文件名包含新版本号
 
 Windows 缺少 Bash / bsdtar 时，可用 Python `zipfile` 按 `build-xpi.sh` 的 FILES 清单打包；必须包含 `vendor/` 和 `locale/`，文件位于 ZIP 根目录，不能多包一层项目目录。不要覆盖已有测试安装包。检查 ZIP 完整性、包内版本及核心文件与工作区一致。仅打包测试版时不更新 GitHub 发布元数据、不推送标签。
+
+### 本地测试安装与运行校验
+
+- 使用 Zotero 插件管理器安装本地 XPI，或通过已安装的本机调试接口调用 `AddonManager.getInstallForFile()`，等待 `onInstallEnded` 后确认安装完成。更新前检查 MinerU 没有运行中的任务。
+- 不能只覆盖 profile 下的 XPI 并依靠文件校验和宣布安装成功。0.1.74 → 0.1.75 的实测中，磁盘包与设置页已更新，Zotero 仍登记并运行旧版，`getSettings()` 没有返回 `forceOCR`；通过标准安装接口重新安装后才恢复。
+- 安装后同时核对 AddonManager 登记版本、`Zotero.getMainWindow().ZoteroMineru.version` 和运行对象的 `getSettings()`。OCR 开关需检查实际返回的布尔值，函数 `toString()` 包含新字段不足以证明运行逻辑已更新。
+- OCR 请求验证可用 `Object.create(plugin)` 创建局部探测对象，覆盖其 `requestMineruJSON`，在网络发送前捕获并终止请求，确认 `files[].is_ocr` 与设置一致。不要为探测替换全局插件的方法，也不要将凭据写入诊断输出。
 
 ### 发布流程 (GitHub Actions)
 
@@ -114,6 +121,7 @@ Windows 缺少 Bash / bsdtar 时，可用 Python `zipfile` 按 `build-xpi.sh` �
 | apiBaseURL | string | `https://mineru.net/api/v4` | MinerU API 地址 |
 | apiToken | string | | API Token（自动去 `Bearer ` 前缀） |
 | modelVersion | string | `pipeline` | `pipeline` 或 `vlm` |
+| forceOCR | bool | `false` | 忽略 PDF 文字层，强制重新识别全部文字；对应 `files[].is_ocr` |
 | noteIncludeImages | bool | `false` | 将 Markdown 转为笔记时是否嵌入图片；默认关闭以减少 Zotero 卡顿 |
 | pollIntervalSec | int | 3 | 轮询间隔（秒） |
 | timeoutSec | int | 120 | MinerU 单次请求（含正文读取）超时及解析轮询总时限（秒） |
@@ -168,7 +176,7 @@ Windows 缺少 Bash / bsdtar 时，可用 Python `zipfile` 按 `build-xpi.sh` �
 ## PDF 解析流程
 
 1. 读取本地 PDF → `IOUtils.read()`
-2. 申请上传地址 → POST `/file-urls/batch`
+2. 申请上传地址 → POST `/file-urls/batch`，每个文件的 `is_ocr` 由 `forceOCR` 决定（缺失或关闭时为 false），适用于 pipeline / vlm
 3. 上传 PDF → PUT 到返回的 upload URL
 4. 轮询结果 → GET `/extract-results/batch/{batchID}`（`pollMineruExtractResult`）
 5. 下载 ZIP → 匿名下载优先，HTTP 地址先尝试 HTTPS；仅配置 API 同源的 HTTPS 地址可回退到 Bearer 认证，认证请求拒绝重定向，第三方下载地址和 HTTP 请求不携带 Token。
@@ -309,6 +317,7 @@ Parent Item (论文条目)
 设置保存先校验全部字段，再写入偏好；任何校验失败都不写入本次设置。数值必须为完整整数且符合界面最小/最大值，额外 JSON 不得覆盖 model/messages。错误字段带 `aria-invalid` 和红色轮廓，自动保存也显示错误但不抢焦点；显式保存会聚焦错误字段。校验通过后清除错误；两个连接测试均在校验失败时停止，避免使用旧配置。Token 和 LLM Key 保存前去除空白及 Bearer 前缀。
 
 MinerU 解析相关设置项补充：
+- **强制 OCR** — 默认关闭；位于 PDF 解析区域，忽略文字层并重新识别全部文字，用于乱码、错误上下标等问题，可能增加解析耗时。自动保存为布尔偏好 `forceOCR`；连接测试使用同一配置。仅影响后续解析，已有结果需删除解析子附件/笔记或移除其 `#MinerU-Parse` 标签后重新解析。
 - Markdown 附件默认带图保存，不受设置开关影响
 - **转化笔记时带图** — 控制“Markdown 转笔记”菜单生成的 Zotero 笔记是否嵌图，默认关闭
 
@@ -340,6 +349,8 @@ git diff --check
 测试模拟 Zotero、存储和模型，覆盖解析附件及配套 Markdown、图片与公式、输出模式、文字片段还原、异常返回、重试和部分保存、批处理继续、显式附件选择、总结原始 Markdown 读取与缺失报错，以及双栏请求数一致性。
 
 网络回归测试另覆盖 Token 来源限制、认证请求禁用重定向、请求及正文读取超时中止、上传阶段报错、超时后重试不叠加、轮询总时限、Retry-After 和永久错误不重试、LLM 截断返回拒绝，以及长文分段覆盖、分层汇总、自定义 Prompt 和不收敛保护。
+
+强制 OCR 回归覆盖两个模型下未设置、关闭和开启时的实际上传申请 JSON（`files[].is_ocr`）、PDF 上传仍不添加签名外请求头，以及设置保存、重新加载和连接测试参数一致性。
 
 安全回归测试覆盖图片路径边界、危险/编码链接、DOMParser 失败时转义、设置校验零写入、数值范围、JSON 保留字段和连接测试阻断。用浏览器打开 `tests/html-safety.browser.html`，结果应显示 PASS；该测试使用真实 DOMParser 验证表格属性过滤，同时保留表格、基础格式、公式与正常链接。
 
